@@ -20,7 +20,6 @@ html, body {
 #top-bar {
   position: sticky;
   top: 0;
-  display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
@@ -29,6 +28,13 @@ html, body {
   border-bottom: 1px solid #222;
   font-size: 0.95rem;
   color: var(--muted);
+}
+
+/* A direct display:flex here would win over the browser's [hidden] rule
+   (ID selector beats it outright), so toggling .hidden in JS would never
+   actually hide this bar. Scope display to :not([hidden]) instead. */
+#top-bar:not([hidden]) {
+  display: flex;
 }
 
 #leave-room-btn {
