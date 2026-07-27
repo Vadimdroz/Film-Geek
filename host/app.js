@@ -28,6 +28,10 @@ const els = {
 
   allDonePanel: document.getElementById("all-done-panel"),
   reshuffleBtn: document.getElementById("reshuffle-btn"),
+
+  errorPanel: document.getElementById("error-panel"),
+  errorMessage: document.getElementById("error-message"),
+  errorSkipBtn: document.getElementById("error-skip-btn"),
 };
 
 let clips = [];
@@ -35,8 +39,16 @@ let queue = []; // indices into `clips` not yet shown this round
 let currentClip = null;
 
 let ytPlayer = null;
-let ytReady = false;
+let playerReady = false; // true only after the player's onReady event fires
 let endWatcher = null;
+
+const PLAYER_ERROR_MESSAGES = {
+  2: "Invalid YouTube video ID for this clip.",
+  5: "This clip can't be played in an embedded player (browser/HTML5 issue).",
+  100: "This video was removed or made private.",
+  101: "The video owner has disabled embedding for this clip.",
+  150: "The video owner has disabled embedding for this clip.",
+};
 
 // ---------- Clip library ----------
 
@@ -85,6 +97,7 @@ function showPanel(name) {
   els.endedPanel.hidden = name !== "ended";
   els.answerPanel.hidden = name !== "answer";
   els.allDonePanel.hidden = name !== "all-done";
+  els.errorPanel.hidden = name !== "error";
   els.cover.hidden = false;
 }
 
@@ -94,9 +107,11 @@ function showIdle() {
 }
 
 // ---------- YouTube player ----------
+// playerReady only flips true once the IFrame API's onReady event fires —
+// the player object exists as soon as the script loads, but calling methods
+// like loadVideoById before onReady can silently no-op.
 
 window.onYouTubeIframeAPIReady = function () {
-  ytReady = true;
   ytPlayer = new YT.Player("yt-player", {
     host: "https://www.youtube-nocookie.com",
     playerVars: {
@@ -108,8 +123,41 @@ window.onYouTubeIframeAPIReady = function () {
       fs: 0,
       playsinline: 1,
     },
+    events: {
+      onReady: () => {
+        playerReady = true;
+        els.startBtn.disabled = false;
+        els.startBtn.textContent = "▶ Start round";
+      },
+      onError: (e) => handlePlayerError(e.data),
+    },
   });
+
+  setTimeout(() => {
+    if (!playerReady) {
+      els.startBtn.textContent = "Still loading — check your connection or an ad-blocker, then reload";
+    }
+  }, 8000);
 };
+
+function handlePlayerError(code) {
+  if (endWatcher) {
+    clearInterval(endWatcher);
+    endWatcher = null;
+  }
+  els.hud.hidden = true;
+  els.errorMessage.textContent =
+    PLAYER_ERROR_MESSAGES[code] || `Player error (code ${code}) — this clip may need re-tagging.`;
+  showPanel("error");
+}
+
+els.errorSkipBtn.addEventListener("click", () => {
+  if (queue.length === 0) {
+    showPanel("all-done");
+  } else {
+    showIdle();
+  }
+});
 
 function playClip(clip) {
   currentClip = clip;
@@ -145,6 +193,7 @@ els.stopEarlyBtn.addEventListener("click", finishClip);
 // ---------- Round flow ----------
 
 els.startBtn.addEventListener("click", () => {
+  if (!playerReady) return; // guarded by disabled attribute too; belt-and-suspenders
   if (queue.length === 0) {
     showPanel("all-done");
     return;
