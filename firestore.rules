@@ -1,0 +1,42 @@
+rules_version = '2';
+
+// Film-Geek Firestore rules.
+//
+// Everyone (host + players) signs in anonymously, so request.auth.uid is
+// always available. The room doc only ever holds public-safe fields
+// (phase, round number, multiple-choice options) — the actual answer for
+// the current clip lives in rooms/{code}/private/answer, which only the
+// room's host (hostUid) can read. This is what stops a player from
+// opening devtools and reading the answer out of Firestore before reveal.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isHost(roomCode) {
+      return isSignedIn() &&
+        get(/databases/$(database)/documents/rooms/$(roomCode)).data.hostUid == request.auth.uid;
+    }
+
+    match /rooms/{roomCode} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.resource.data.hostUid == request.auth.uid;
+      allow update: if isHost(roomCode);
+
+      match /private/{docId} {
+        allow read, write: if isHost(roomCode);
+      }
+
+      match /players/{uid} {
+        allow read: if isSignedIn();
+        allow create, update: if isSignedIn() && request.auth.uid == uid;
+      }
+
+      match /rounds/{roundIndex}/guesses/{uid} {
+        allow read: if isHost(roomCode) || (isSignedIn() && request.auth.uid == uid);
+        allow create: if isSignedIn() && request.auth.uid == uid;
+      }
+    }
+  }
+}
