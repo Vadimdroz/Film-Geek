@@ -56,11 +56,25 @@
 - Secrets (Firebase config, TMDb API key) via environment variables, never committed.
 
 ### I. Suggested build order (MVP milestones)
-1. Manual tagging tool + 10 hand-picked clips in Firestore.
-2. Host display that plays a clip cleanly with the answer hidden.
-3. Room code + one phone joining as a player, buzzer works.
-4. Scoring + reveal flow for a full round with 2+ players.
+1. ✅ Manual tagging tool + hand-picked clips (localStorage for now, Firestore sync is a later nice-to-have).
+2. ✅ Host display that plays a clip cleanly with the answer hidden.
+3. ✅ Room code + phones joining as players, multiple-choice guessing works.
+4. Scoring is wired (host tallies + updates player scores on reveal) — still needs a real multi-player playtest.
 5. PC-TV kiosk polish, then the phone-mirroring fallback.
+
+### K. Firestore data model (milestone 3)
+Firebase project: `film-geek` (separate from other personal projects). Everyone — host and players — signs in anonymously (silent, no login UI) so security rules have a `request.auth.uid` to check against.
+
+```
+rooms/{roomCode}                        — public: hostUid, phase, roundIndex, currentOptions, revealedAnswer
+rooms/{roomCode}/private/answer         — host-only: the real movieTitle/year/director/cast for the current clip
+rooms/{roomCode}/players/{uid}          — name, score (each player writes only their own doc)
+rooms/{roomCode}/rounds/{roundIndex}/guesses/{uid} — a player's submitted choice for that round
+```
+
+The split between the public room doc and the host-only `private/answer` doc is what stops a player from opening devtools and reading the answer out of Firestore before reveal — see `/firestore.rules` for the exact rules (paste into Firebase Console → Firestore Database → Rules → Publish).
+
+Multiple-choice options are generated from other tagged movie titles in the library as distractors; with a small library this degrades to 2 options, and below 2 the player app falls back to a free-text guess for that round.
 
 ### J. Risks to watch, not solve now
 - Per-video embed restrictions and regional availability changing over time.
