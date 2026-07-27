@@ -23,7 +23,12 @@
 
     <div id="idle-panel">
       <p id="queue-status" class="queue-status"></p>
-      <button id="start-btn" class="giant-btn">▶ Start round</button>
+      <button id="start-btn" class="giant-btn" disabled>Loading player…</button>
+    </div>
+
+    <div id="error-panel" hidden>
+      <p id="error-message" class="queue-status"></p>
+      <button id="error-skip-btn" class="giant-btn">Skip this clip →</button>
     </div>
 
     <div id="no-clips-panel" hidden>
