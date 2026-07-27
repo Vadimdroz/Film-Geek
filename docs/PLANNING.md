@@ -11,7 +11,7 @@
 
 3. **Content model: pointers, not files.** Each clip is metadata: `{ youtubeId, startSec, endSec, title, year, director, cast, tags }`. A tagging tool builds this library — this is the real content bottleneck of the project, more than any code.
 
-4. **Hiding the answer is a real engineering problem.** A raw YouTube embed leaks the title, channel name, suggested videos, and URL. Needs deliberate handling: custom play/pause overlay, `youtube-nocookie.com`, disabled related videos/annotations, tight start/end trimming, a cover screen for the first-frame flash.
+4. **Hiding the answer is a real engineering problem.** A raw YouTube embed leaks the title, channel name, suggested videos, and URL. Needs deliberate handling: custom play/pause overlay, disabled controls/related videos/annotations (`controls=0`, `rel=0`, `iv_load_policy=3`), tight start/end trimming, a cover screen for the first-frame flash. Deliberately *not* using the `youtube-nocookie.com` embed domain — it's a nice privacy touch but its cross-origin handshake with the parent page can get silently blocked by ad-blockers/privacy settings, leaving the player's `onReady` event never firing at all.
 
 5. **One GitHub repo, hosted, versioned from day one.** Cloudflare Pages for hosting, Firebase for data/sync, tagged releases as checkpoints.
 
