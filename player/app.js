@@ -19,6 +19,7 @@ const els = {
   topBar: document.getElementById("top-bar"),
   topRoom: document.getElementById("top-room"),
   topScore: document.getElementById("top-score"),
+  leaveRoomBtn: document.getElementById("leave-room-btn"),
 
   screens: {
     join: document.getElementById("join-screen"),
@@ -51,6 +52,8 @@ let lastSeenRoundIndex = -1;
 let hasGuessedThisRound = false;
 let myLastChoice = null;
 let currentOptions = [];
+let unsubRoom = null;
+let unsubMyPlayer = null;
 
 function showScreen(name) {
   for (const [key, el] of Object.entries(els.screens)) {
@@ -112,20 +115,47 @@ els.joinBtn.addEventListener("click", async () => {
 // ---------- Live room state ----------
 
 function attachListeners() {
+  if (unsubRoom) unsubRoom();
+  if (unsubMyPlayer) unsubMyPlayer();
+
   els.topBar.hidden = false;
   els.topRoom.textContent = `Room ${roomCode}`;
   showScreen("waiting");
 
-  onSnapshot(doc(db, "rooms", roomCode), (snap) => {
+  unsubRoom = onSnapshot(doc(db, "rooms", roomCode), (snap) => {
     const data = snap.data();
     if (data) handleRoomUpdate(data);
   });
 
-  onSnapshot(doc(db, "rooms", roomCode, "players", myUid), (snap) => {
+  unsubMyPlayer = onSnapshot(doc(db, "rooms", roomCode, "players", myUid), (snap) => {
     const data = snap.data();
     if (data) els.topScore.textContent = `Score: ${data.score || 0}`;
   });
 }
+
+function leaveRoom() {
+  if (unsubRoom) {
+    unsubRoom();
+    unsubRoom = null;
+  }
+  if (unsubMyPlayer) {
+    unsubMyPlayer();
+    unsubMyPlayer = null;
+  }
+  localStorage.removeItem(ROOM_STORAGE_KEY);
+  localStorage.removeItem(NAME_STORAGE_KEY);
+  roomCode = null;
+  lastSeenRoundIndex = -1;
+  hasGuessedThisRound = false;
+  myLastChoice = null;
+  els.topBar.hidden = true;
+  els.roomCodeInput.value = "";
+  els.nameInput.value = "";
+  showJoinError("");
+  showScreen("join");
+}
+
+els.leaveRoomBtn.addEventListener("click", leaveRoom);
 
 function handleRoomUpdate(data) {
   if (data.roundIndex !== lastSeenRoundIndex) {
