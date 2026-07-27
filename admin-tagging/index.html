@@ -9,17 +9,27 @@
 <body>
 <header>
   <h1>🎬 Film-Geek — Clip Tagging Tool</h1>
-  <p class="subtitle">Paste a YouTube clip, pick a start/end, tag the movie. Saved locally in this browser.</p>
+  <p class="subtitle">Paste a YouTube clip and the movie title — the rest autofills. Saved locally in this browser.</p>
 </header>
 
 <main>
+  <section class="card" id="tmdb-key-section">
+    <div class="row tmdb-key-row">
+      <label class="grow">TMDb API key <span class="hint">(paste once — saved in this browser, used to autofill year/director/cast)</span>
+        <input id="tmdb-key" type="password" autocomplete="off" placeholder="paste TMDb v3 API key" />
+      </label>
+    </div>
+  </section>
+
   <section class="card" id="clip-input-section">
-    <h2>1. Paste a clip</h2>
+    <h2>1. Paste a clip + title</h2>
     <div class="row">
       <input id="youtube-url" type="text" placeholder="YouTube URL or video ID" autocomplete="off" />
-      <button id="check-btn">Check clip</button>
+      <input id="movie-title" type="text" placeholder="Movie title" autocomplete="off" />
+      <button id="check-btn">Add clip</button>
     </div>
     <div id="check-result" class="check-result"></div>
+    <div id="tmdb-status" class="check-result"></div>
   </section>
 
   <section class="card" id="player-section" hidden>
@@ -40,16 +50,9 @@
 
   <section class="card" id="metadata-section" hidden>
     <h2>3. Tag the movie</h2>
-    <div class="row tmdb-key-row">
-      <label class="grow">TMDb API key <span class="hint">(optional, only used for autofill, stored in this browser only)</span>
-        <input id="tmdb-key" type="password" autocomplete="off" placeholder="paste TMDb v3 API key" />
-      </label>
-    </div>
     <div class="row">
-      <label class="grow">Movie title
-        <input id="movie-title" type="text" />
-      </label>
-      <button id="autofill-btn">Autofill from TMDb</button>
+      <span class="hint">Title: <strong id="metadata-title-display"></strong></span>
+      <button id="autofill-btn">Re-run TMDb lookup</button>
     </div>
     <div id="tmdb-picker" class="tmdb-picker" hidden></div>
     <div class="row">
