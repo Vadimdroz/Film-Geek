@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Film-Geek — Player</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<header id="top-bar" hidden>
+  <span id="top-room">Room ----</span>
+  <span id="top-score">Score: 0</span>
+</header>
+
+<main>
+  <section id="join-screen" class="screen">
+    <h1>🎬 Film-Geek</h1>
+    <p class="hint">Ask the host for the room code shown on the TV.</p>
+    <label>Room code
+      <input id="room-code-input" type="text" maxlength="4" autocapitalize="characters" autocomplete="off" placeholder="ABCD" />
+    </label>
+    <label>Your name
+      <input id="name-input" type="text" maxlength="24" autocomplete="off" placeholder="Your name" />
+    </label>
+    <button id="join-btn" class="giant-btn">Join</button>
+    <p id="join-error" class="error-text"></p>
+  </section>
+
+  <section id="waiting-screen" class="screen" hidden>
+    <h1>You're in!</h1>
+    <p class="hint">Waiting for the host to start the next round…</p>
+  </section>
+
+  <section id="guessing-screen" class="screen" hidden>
+    <h1>What movie is this?</h1>
+    <div id="guess-options"></div>
+    <div id="guess-freetext" hidden>
+      <input id="guess-freetext-input" type="text" placeholder="Type your guess" autocomplete="off" />
+      <button id="guess-freetext-btn" class="giant-btn">Submit</button>
+    </div>
+  </section>
+
+  <section id="locked-screen" class="screen" hidden>
+    <h1>Answer locked in</h1>
+    <p class="hint">You guessed:</p>
+    <p id="locked-choice" class="locked-choice"></p>
+    <p class="hint">Waiting for the reveal…</p>
+  </section>
+
+  <section id="revealed-screen" class="screen" hidden>
+    <h1 id="revealed-title"></h1>
+    <p id="revealed-meta" class="hint"></p>
+    <p id="revealed-your-guess" class="your-guess"></p>
+    <p class="hint">Next round starting soon…</p>
+  </section>
+</main>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
