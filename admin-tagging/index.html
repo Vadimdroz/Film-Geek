@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Film-Geek — Clip Tagging Tool</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<header>
+  <h1>🎬 Film-Geek — Clip Tagging Tool</h1>
+  <p class="subtitle">Paste a YouTube clip, pick a start/end, tag the movie. Saved locally in this browser.</p>
+</header>
+
+<main>
+  <section class="card" id="clip-input-section">
+    <h2>1. Paste a clip</h2>
+    <div class="row">
+      <input id="youtube-url" type="text" placeholder="YouTube URL or video ID" autocomplete="off" />
+      <button id="check-btn">Check clip</button>
+    </div>
+    <div id="check-result" class="check-result"></div>
+  </section>
+
+  <section class="card" id="player-section" hidden>
+    <h2>2. Set start &amp; end</h2>
+    <div id="yt-player"></div>
+    <div class="row controls-row">
+      <span class="current-time">Playhead: <strong id="current-time">0.0</strong>s</span>
+      <button id="set-start-btn">Set start here</button>
+      <button id="set-end-btn">Set end here</button>
+      <button id="preview-btn">▶ Preview clip</button>
+    </div>
+    <div class="row range-row">
+      <label>Start <input type="number" id="start-sec" step="0.1" min="0" value="0" /> s</label>
+      <label>End <input type="number" id="end-sec" step="0.1" min="0" value="10" /> s</label>
+      <span id="duration-display" class="duration-display"></span>
+    </div>
+  </section>
+
+  <section class="card" id="metadata-section" hidden>
+    <h2>3. Tag the movie</h2>
+    <div class="row tmdb-key-row">
+      <label class="grow">TMDb API key <span class="hint">(optional, only used for autofill, stored in this browser only)</span>
+        <input id="tmdb-key" type="password" autocomplete="off" placeholder="paste TMDb v3 API key" />
+      </label>
+    </div>
+    <div class="row">
+      <label class="grow">Movie title
+        <input id="movie-title" type="text" />
+      </label>
+      <button id="autofill-btn">Autofill from TMDb</button>
+    </div>
+    <div id="tmdb-picker" class="tmdb-picker" hidden></div>
+    <div class="row">
+      <label>Year <input id="movie-year" type="number" /></label>
+      <label class="grow">Director <input id="movie-director" type="text" /></label>
+    </div>
+    <div class="row">
+      <label class="grow">Cast <span class="hint">(comma-separated)</span>
+        <input id="movie-cast" type="text" />
+      </label>
+    </div>
+    <div class="row">
+      <label class="grow">Genre <input id="movie-genre" type="text" /></label>
+      <label>Difficulty
+        <select id="movie-difficulty">
+          <option value="easy">easy</option>
+          <option value="medium" selected>medium</option>
+          <option value="hard">hard</option>
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <label class="grow">Notes <textarea id="movie-notes" rows="2"></textarea></label>
+    </div>
+    <div class="row">
+      <button id="save-clip-btn" class="primary">Save clip</button>
+      <button id="cancel-edit-btn" hidden>Cancel edit</button>
+    </div>
+  </section>
+
+  <section class="card" id="library-section">
+    <h2>Clip library <span id="clip-count" class="clip-count"></span></h2>
+    <div class="row library-toolbar">
+      <button id="export-btn">Export JSON</button>
+      <label class="import-label">Import JSON
+        <input type="file" id="import-input" accept="application/json" hidden />
+      </label>
+    </div>
+    <table id="clip-table">
+      <thead>
+        <tr>
+          <th></th>
+          <th>Title</th>
+          <th>Year</th>
+          <th>Director</th>
+          <th>Start–End</th>
+          <th>Difficulty</th>
+          <th>Embeddable</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="clip-table-body"></tbody>
+    </table>
+  </section>
+</main>
+
+<script src="https://www.youtube.com/iframe_api"></script>
+<script src="app.js"></script>
+</body>
+</html>
