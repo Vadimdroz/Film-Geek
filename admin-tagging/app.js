@@ -19,7 +19,9 @@ const els = {
   durationDisplay: document.getElementById("duration-display"),
 
   metadataSection: document.getElementById("metadata-section"),
+  metadataTitleDisplay: document.getElementById("metadata-title-display"),
   tmdbKey: document.getElementById("tmdb-key"),
+  tmdbStatus: document.getElementById("tmdb-status"),
   movieTitle: document.getElementById("movie-title"),
   autofillBtn: document.getElementById("autofill-btn"),
   tmdbPicker: document.getElementById("tmdb-picker"),
@@ -108,6 +110,7 @@ els.checkBtn.addEventListener("click", async () => {
     els.checkResult.appendChild(text);
     els.checkResult.classList.add("ok");
     openPlayerFor(videoId);
+    runTmdbAutofill();
   } catch (err) {
     currentVideoId = videoId;
     currentEmbeddable = false;
@@ -116,7 +119,10 @@ els.checkBtn.addEventListener("click", async () => {
     text.textContent = "Could not confirm this clip embeds (blocked, region-locked, or invalid ID). ";
     const proceedBtn = document.createElement("button");
     proceedBtn.textContent = "Use anyway";
-    proceedBtn.addEventListener("click", () => openPlayerFor(videoId));
+    proceedBtn.addEventListener("click", () => {
+      openPlayerFor(videoId);
+      runTmdbAutofill();
+    });
     els.checkResult.appendChild(text);
     els.checkResult.appendChild(proceedBtn);
     els.checkResult.classList.add("bad");
@@ -133,6 +139,7 @@ window.onYouTubeIframeAPIReady = function () {
 function openPlayerFor(videoId) {
   els.playerSection.hidden = false;
   els.metadataSection.hidden = false;
+  els.metadataTitleDisplay.textContent = els.movieTitle.value.trim() || "(untitled)";
 
   const start = () => {
     if (ytPlayer) {
@@ -218,64 +225,81 @@ els.tmdbKey.addEventListener("change", () => {
   localStorage.setItem(TMDB_KEY_STORAGE, els.tmdbKey.value.trim());
 });
 
-els.autofillBtn.addEventListener("click", async () => {
+els.autofillBtn.addEventListener("click", () => runTmdbAutofill());
+
+function setTmdbStatus(message, tone) {
+  els.tmdbStatus.textContent = message;
+  els.tmdbStatus.className = "check-result" + (tone ? ` ${tone}` : "");
+}
+
+async function tmdbSearch(title, key) {
+  const res = await fetch(
+    `https://api.themoviedb.org/3/search/movie?api_key=${encodeURIComponent(key)}&query=${encodeURIComponent(title)}`
+  );
+  if (!res.ok) throw new Error(`TMDb search returned ${res.status}`);
+  const data = await res.json();
+  return data.results || [];
+}
+
+// Runs the TMDb waterfall: search by title, auto-apply the best match, and
+// offer the rest as overrides. Uses inline status text rather than alert()
+// so it can run automatically right after "Add clip", not just on a click.
+async function runTmdbAutofill() {
   const key = els.tmdbKey.value.trim();
   const title = els.movieTitle.value.trim();
   els.tmdbPicker.hidden = true;
   els.tmdbPicker.innerHTML = "";
 
   if (!key) {
-    alert("Paste a TMDb API key above first (free at themoviedb.org/settings/api).");
+    setTmdbStatus("No TMDb key saved yet — paste one above to autofill year/director/cast.", "muted");
     return;
   }
   if (!title) {
-    alert("Type a movie title first, then autofill.");
+    setTmdbStatus("Add a movie title above to autofill from TMDb.", "muted");
     return;
   }
 
+  setTmdbStatus("Looking up on TMDb…", "muted");
+
   try {
-    const searchRes = await fetch(
-      `https://api.themoviedb.org/3/search/movie?api_key=${encodeURIComponent(key)}&query=${encodeURIComponent(title)}`
-    );
-    if (!searchRes.ok) throw new Error(`TMDb search returned ${searchRes.status}`);
-    const searchData = await searchRes.json();
-    const results = searchData.results || [];
-
+    const results = await tmdbSearch(title, key);
     if (results.length === 0) {
-      alert("No TMDb matches for that title — fill in the details manually.");
-      return;
-    }
-    if (results.length === 1) {
-      await fillFromTmdbMovie(results[0].id, key);
+      setTmdbStatus("No TMDb matches for that title — fill in the details manually.", "bad");
       return;
     }
 
-    els.tmdbPicker.hidden = false;
-    results.slice(0, 8).forEach((movie) => {
-      const btn = document.createElement("button");
+    const best = results[0];
+    const applyMatch = async (movie) => {
+      await fillFromTmdbMovie(movie.id, key);
+      els.movieTitle.value = movie.title;
+      els.metadataTitleDisplay.textContent = movie.title;
       const year = (movie.release_date || "").slice(0, 4) || "?";
-      btn.textContent = `${movie.title} (${year})`;
-      btn.addEventListener("click", async () => {
-        await fillFromTmdbMovie(movie.id, key);
-        els.tmdbPicker.hidden = true;
+      setTmdbStatus(`Matched "${movie.title}" (${year}) on TMDb.`, "ok");
+    };
+
+    await applyMatch(best);
+
+    if (results.length > 1) {
+      els.tmdbPicker.hidden = false;
+      results.slice(0, 8).forEach((movie) => {
+        const btn = document.createElement("button");
+        const year = (movie.release_date || "").slice(0, 4) || "?";
+        btn.textContent = movie.id === best.id ? `✓ ${movie.title} (${year})` : `${movie.title} (${year})`;
+        btn.addEventListener("click", () => applyMatch(movie));
+        els.tmdbPicker.appendChild(btn);
       });
-      els.tmdbPicker.appendChild(btn);
-    });
+    }
   } catch (err) {
-    alert(`TMDb lookup failed: ${err.message}`);
+    setTmdbStatus(`TMDb lookup failed: ${err.message}`, "bad");
   }
-});
+}
 
 async function fillFromTmdbMovie(movieId, key) {
   const res = await fetch(
     `https://api.themoviedb.org/3/movie/${movieId}?api_key=${encodeURIComponent(key)}&append_to_response=credits`
   );
-  if (!res.ok) {
-    alert(`TMDb details lookup failed (${res.status}).`);
-    return;
-  }
+  if (!res.ok) throw new Error(`TMDb details lookup failed (${res.status})`);
   const data = await res.json();
-  els.movieTitle.value = data.title || els.movieTitle.value;
   els.movieYear.value = (data.release_date || "").slice(0, 4) || "";
   const director = (data.credits?.crew || []).find((c) => c.job === "Director");
   els.movieDirector.value = director ? director.name : "";
@@ -318,6 +342,9 @@ function resetForm() {
   els.movieNotes.value = "";
   els.tmdbPicker.hidden = true;
   els.tmdbPicker.innerHTML = "";
+  els.tmdbStatus.textContent = "";
+  els.tmdbStatus.className = "check-result";
+  els.metadataTitleDisplay.textContent = "";
   els.cancelEditBtn.hidden = true;
   if (previewWatchInterval) clearInterval(previewWatchInterval);
 }
@@ -444,7 +471,7 @@ function loadClipIntoForm(index) {
   els.movieNotes.value = clip.notes || "";
 
   els.cancelEditBtn.hidden = false;
-  openPlayerFor(clip.youtubeId);
+  openPlayerFor(clip.youtubeId); // also syncs metadata-title-display from movieTitle
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
