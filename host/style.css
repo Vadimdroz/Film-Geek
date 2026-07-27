@@ -98,6 +98,27 @@ html, body {
 }
 
 .giant-btn:hover { filter: brightness(1.1); }
+.giant-btn:disabled { background: #3a3a3f; color: var(--muted); cursor: default; }
+
+.room-info { margin-bottom: 2rem; }
+.room-info p { margin: 0.2rem 0; color: var(--muted); font-size: 1rem; }
+.room-code {
+  font-size: 3rem;
+  font-weight: 800;
+  letter-spacing: 0.2em;
+  color: var(--fg) !important;
+}
+
+.results-list {
+  margin: 0 0 2rem;
+  text-align: left;
+  font-size: 1.2rem;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.results-list > div { padding: 0.3rem 0; border-bottom: 1px solid #222; }
+.result-correct { color: #6cc785; }
+.result-wrong { color: #ff8a80; }
 
 .queue-status {
   color: var(--muted);
