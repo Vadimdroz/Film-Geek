@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Film-Geek — Host</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div id="player-wrap">
+  <div id="yt-player"></div>
+</div>
+
+<div id="hud" hidden>
+  <span id="timer">10</span>s
+  <button id="stop-early-btn">Stop clip</button>
+</div>
+
+<div id="cover" class="cover">
+  <div class="cover-inner">
+    <div class="logo">🎬 Film-Geek</div>
+
+    <div id="idle-panel">
+      <p id="queue-status" class="queue-status"></p>
+      <button id="start-btn" class="giant-btn">▶ Start round</button>
+    </div>
+
+    <div id="no-clips-panel" hidden>
+      <p>No clips tagged yet.</p>
+      <p class="hint">Tag some in the admin tool (same browser, same origin), or import a JSON export below.</p>
+      <label class="import-label">Import JSON
+        <input type="file" id="import-input" accept="application/json" hidden />
+      </label>
+    </div>
+
+    <div id="ended-panel" hidden>
+      <button id="reveal-btn" class="giant-btn">Reveal answer</button>
+    </div>
+
+    <div id="answer-panel" hidden>
+      <h1 id="answer-title"></h1>
+      <div id="answer-meta" class="answer-meta"></div>
+      <button id="next-btn" class="giant-btn">Next clip →</button>
+    </div>
+
+    <div id="all-done-panel" hidden>
+      <p>That's every clip in the library.</p>
+      <button id="reshuffle-btn" class="giant-btn">Reshuffle &amp; play again</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://www.youtube.com/iframe_api"></script>
+<script src="app.js"></script>
+</body>
+</html>
