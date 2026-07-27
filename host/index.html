@@ -21,6 +21,12 @@
   <div class="cover-inner">
     <div class="logo">🎬 Film-Geek</div>
 
+    <div id="room-info" class="room-info">
+      <p>Join at <strong>vadimdroz.github.io/Film-Geek/player/</strong> with room code</p>
+      <p class="room-code" id="room-code-display">----</p>
+      <p id="player-count" class="hint"></p>
+    </div>
+
     <div id="idle-panel">
       <p id="queue-status" class="queue-status"></p>
       <button id="start-btn" class="giant-btn" disabled>Loading player…</button>
@@ -40,12 +46,14 @@
     </div>
 
     <div id="ended-panel" hidden>
+      <p id="guess-count" class="queue-status"></p>
       <button id="reveal-btn" class="giant-btn">Reveal answer</button>
     </div>
 
     <div id="answer-panel" hidden>
       <h1 id="answer-title"></h1>
       <div id="answer-meta" class="answer-meta"></div>
+      <div id="results-list" class="results-list"></div>
       <button id="next-btn" class="giant-btn">Next clip →</button>
     </div>
 
@@ -57,6 +65,6 @@
 </div>
 
 <script src="https://www.youtube.com/iframe_api"></script>
-<script src="app.js"></script>
+<script type="module" src="app.js"></script>
 </body>
 </html>
