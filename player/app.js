@@ -131,6 +131,7 @@ function handleRoomUpdate(data) {
   if (data.roundIndex !== lastSeenRoundIndex) {
     lastSeenRoundIndex = data.roundIndex;
     hasGuessedThisRound = false;
+    myLastChoice = null;
   }
   currentOptions = data.currentOptions || [];
 
@@ -212,7 +213,6 @@ function renderRevealed(answer) {
     els.revealedYourGuess.textContent = "You didn't answer this round.";
     els.revealedYourGuess.className = "your-guess";
   }
-  myLastChoice = null;
 }
 
 // ---------- Reconnect on load ----------
