@@ -47,9 +47,13 @@ html, body {
   font-weight: 700;
   color: var(--fg);
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8);
-  display: flex;
   align-items: center;
   gap: 1rem;
+}
+
+/* See .cover comment below re: [hidden] vs display specificity. */
+#hud:not([hidden]) {
+  display: flex;
 }
 
 #stop-early-btn {
@@ -68,10 +72,19 @@ html, body {
   inset: 0;
   background: var(--bg);
   z-index: 10;
-  display: flex;
   align-items: center;
   justify-content: center;
   text-align: center;
+}
+
+/* Setting display:flex directly on .cover would win over the browser's
+   own [hidden] rule at equal CSS specificity (author styles beat the UA
+   stylesheet), so the cover would never actually disappear when playing
+   a clip — it'd sit opaque on top of the video the whole time, silently
+   hiding it while audio still played underneath. Scoping display to
+   :not([hidden]) keeps [hidden] in full control of visibility. */
+.cover:not([hidden]) {
+  display: flex;
 }
 
 .cover-inner {
