@@ -129,13 +129,19 @@ button.primary { background: var(--accent); color: var(--accent-fg); border-colo
 .tmdb-key-row input { flex: 1 1 auto; }
 
 .tmdb-picker {
-  display: flex;
   flex-direction: column;
   gap: 0.4rem;
   margin-bottom: 0.6rem;
   padding: 0.6rem;
   border: 1px dashed var(--border);
   border-radius: 6px;
+}
+
+/* A plain class selector ties the [hidden] UA rule on specificity, and
+   author styles win ties over the UA stylesheet — so display:flex here
+   directly would keep this box visible even when .hidden is set. */
+.tmdb-picker:not([hidden]) {
+  display: flex;
 }
 
 .tmdb-picker button {
