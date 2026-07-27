@@ -263,8 +263,12 @@ function showIdle() {
 // like loadVideoById before onReady can silently no-op.
 
 window.onYouTubeIframeAPIReady = function () {
+  // Deliberately NOT using host: "https://www.youtube-nocookie.com" here —
+  // it's a nice privacy-domain touch, but its cross-origin postMessage
+  // handshake with the parent page can get silently blocked by ad-blockers
+  // and browser privacy settings, leaving onReady never firing. The
+  // playerVars below already do the actual identity-hiding work.
   ytPlayer = new YT.Player("yt-player", {
-    host: "https://www.youtube-nocookie.com",
     playerVars: {
       controls: 0,
       modestbranding: 1,
