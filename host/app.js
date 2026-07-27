@@ -258,11 +258,23 @@ function showIdle() {
 }
 
 // ---------- YouTube player ----------
-// playerReady only flips true once the IFrame API's onReady event fires —
-// the player object exists as soon as the script loads, but calling methods
-// like loadVideoById before onReady can silently no-op.
+// playerReady only flips true once the player's onReady event fires —
+// the constructor exists as soon as the API script loads, but calling
+// methods like loadVideoById before onReady can silently no-op.
+//
+// window.onYouTubeIframeAPIReady is the API's own callback hook, but it's
+// only reliable if it's registered before the API finishes loading — and
+// since our code runs as a deferred module script, on a repeat visit with
+// the API script already cached, the API can finish and skip calling it
+// before we've even registered it. Polling for YT.Player directly instead
+// can't miss that window.
 
-window.onYouTubeIframeAPIReady = function () {
+function createYtPlayerWhenApiReady() {
+  if (!(window.YT && window.YT.Player)) {
+    setTimeout(createYtPlayerWhenApiReady, 100);
+    return;
+  }
+
   // Deliberately NOT using host: "https://www.youtube-nocookie.com" here —
   // it's a nice privacy-domain touch, but its cross-origin postMessage
   // handshake with the parent page can get silently blocked by ad-blockers
@@ -293,7 +305,9 @@ window.onYouTubeIframeAPIReady = function () {
       els.startBtn.textContent = "Still loading — check your connection or an ad-blocker, then reload";
     }
   }, 8000);
-};
+}
+
+createYtPlayerWhenApiReady();
 
 function handlePlayerError(code) {
   if (endWatcher) {
