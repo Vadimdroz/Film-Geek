@@ -141,37 +141,6 @@ input#room-code-input {
   background: rgba(214, 69, 69, 0.2);
 }
 
-.autocomplete-list {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 100%;
-  z-index: 3;
-  margin-top: 2px;
-  background: #1c1d23;
-  border: 1px solid #333;
-  border-radius: 10px;
-  max-height: 200px;
-  overflow-y: auto;
-}
-
-.autocomplete-list button {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: 0.6rem 0.9rem;
-  border: none;
-  background: transparent;
-  color: var(--fg);
-  font-size: 1rem;
-  cursor: pointer;
-}
-
-.autocomplete-list button:hover,
-.autocomplete-list button:active {
-  background: rgba(214, 69, 69, 0.25);
-}
-
 .timer-display {
   font-size: 2.2rem;
   font-weight: 800;
