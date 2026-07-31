@@ -374,6 +374,9 @@ async function initClipSync() {
 }
 
 function resetForm() {
+  if (ytPlayer && typeof ytPlayer.pauseVideo === "function") {
+    ytPlayer.pauseVideo();
+  }
   currentVideoId = null;
   currentEmbeddable = null;
   editingClipId = null;
