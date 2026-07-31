@@ -31,6 +31,7 @@ const els = {
   roomCodeDisplay: document.getElementById("room-code-display"),
   playerCount: document.getElementById("player-count"),
   roundIndicator: document.getElementById("round-indicator"),
+  turnIndicator: document.getElementById("turn-indicator"),
 
   idlePanel: document.getElementById("idle-panel"),
   queueStatus: document.getElementById("queue-status"),
@@ -82,11 +83,26 @@ const PLAYER_ERROR_MESSAGES = {
 let roomCode = null;
 let currentRoundIndex = 0;
 let currentGuesses = {}; // uid -> { teamId, movieGuess, directorGuess, yearGuess, submittedAt }
-let teamsMap = {}; // teamId -> { name, emoji, score, memberNames }
+let teamsMap = {}; // teamId -> { name, emoji, score, memberNames, createdAt }
+let activeTeamId = null; // whose turn it is this round
 let unsubscribeGuesses = null;
 let guessCountdownInterval = null;
 let autoRevealTimeout = null;
 let roundRevealed = false;
+
+// Points scale up sharply with how many of the 3 fields (movie/director/
+// year) a team got right, rather than 1 point per field — rewards a full
+// correct guess much more than a partial one.
+const POINTS_BY_CORRECT_COUNT = { 0: 0, 1: 2, 2: 5, 3: 10 };
+
+// Stable turn order: whoever's team doc was created earliest goes first.
+// Rotates through teams currently in the room — if a team joins mid-game
+// it's added to the rotation from its creation order, same as anyone else.
+function getTeamOrder() {
+  return Object.entries(teamsMap)
+    .sort((a, b) => (a[1].createdAt?.toMillis?.() ?? 0) - (b[1].createdAt?.toMillis?.() ?? 0))
+    .map(([id]) => id);
+}
 
 function generateRoomCode() {
   let code = "";
@@ -155,9 +171,14 @@ async function startRoundInFirestore(clip) {
     currentRoundIndex += 1;
     roundRevealed = false;
     updateRoundIndicator();
+
+    const teamOrder = getTeamOrder();
+    activeTeamId = teamOrder.length ? teamOrder[(currentRoundIndex - 1) % teamOrder.length] : null;
+    updateTurnIndicator();
+
     await setDoc(
       doc(db, "rooms", roomCode),
-      { phase: "playing", roundIndex: currentRoundIndex, revealedAnswer: null, guessDeadline: null },
+      { phase: "playing", roundIndex: currentRoundIndex, revealedAnswer: null, guessDeadline: null, activeTeamId },
       { merge: true }
     );
     await setDoc(doc(db, "rooms", roomCode, "private", "answer"), {
@@ -250,13 +271,19 @@ async function revealInFirestore(clip) {
   if (!roomCode) return { rows: [] };
   const rows = [];
   try {
+    // Only the active team's turn counts for scoring, even if a stray
+    // guess from another team somehow made it into Firestore — the
+    // player app already only shows the guess form to the active team,
+    // this is just belt-and-suspenders.
     const byTeam = earliestGuessPerTeam();
-    for (const [teamId, guess] of Object.entries(byTeam)) {
+    const eligibleEntries = activeTeamId ? Object.entries(byTeam).filter(([teamId]) => teamId === activeTeamId) : [];
+    for (const [teamId, guess] of eligibleEntries) {
       const team = teamsMap[teamId] || { name: "Unknown team", emoji: "❓" };
       const movieOk = normalize(guess.movieGuess) === normalize(clip.movieTitle);
       const directorOk = normalize(guess.directorGuess) === normalize(clip.director);
       const yearOk = String(guess.yearGuess || "").trim() === String(clip.year || "").trim();
-      const points = (movieOk ? 1 : 0) + (directorOk ? 1 : 0) + (yearOk ? 1 : 0);
+      const correctCount = (movieOk ? 1 : 0) + (directorOk ? 1 : 0) + (yearOk ? 1 : 0);
+      const points = POINTS_BY_CORRECT_COUNT[correctCount];
 
       rows.push({
         teamId,
@@ -349,6 +376,11 @@ function showPanel(name) {
   els.allDonePanel.hidden = name !== "all-done";
   els.errorPanel.hidden = name !== "error";
   els.cover.hidden = false;
+}
+
+function updateTurnIndicator() {
+  const team = activeTeamId ? teamsMap[activeTeamId] : null;
+  els.turnIndicator.textContent = team ? `${team.emoji} ${team.name}'s turn!` : "";
 }
 
 function updateRoundIndicator() {
