@@ -1,8 +1,9 @@
 // Film-Geek host display — vanilla JS, no build step.
 // Reads the same clip library the admin-tagging tool writes to (same-origin
 // localStorage). Room/round state syncs to Firestore so player phones can
-// join and submit guesses; the answer itself is written to a host-only
-// "private" doc so it's never readable from a player's browser before reveal.
+// join teams and submit guesses; the answer itself is written to a
+// host-only "private" doc so it's never readable from a player's browser
+// before reveal. Scoring is per-team, not per-player.
 
 import { db, authReady } from "../shared/firebase.js";
 import {
@@ -18,6 +19,7 @@ import {
 
 const STORAGE_KEY = "filmgeek_clips";
 const ROOM_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no I/O/0/1, easy to read aloud
+const GUESS_WINDOW_MS = 60000;
 
 const els = {
   playerWrap: document.getElementById("player-wrap"),
@@ -37,6 +39,7 @@ const els = {
   importInput: document.getElementById("import-input"),
 
   endedPanel: document.getElementById("ended-panel"),
+  guessTimer: document.getElementById("guess-timer"),
   guessCount: document.getElementById("guess-count"),
   revealBtn: document.getElementById("reveal-btn"),
 
@@ -77,9 +80,12 @@ const PLAYER_ERROR_MESSAGES = {
 
 let roomCode = null;
 let currentRoundIndex = 0;
-let currentGuesses = {}; // uid -> { choice, submittedAt }
-let playersMap = {}; // uid -> { name, score }
+let currentGuesses = {}; // uid -> { teamId, movieGuess, directorGuess, yearGuess, submittedAt }
+let teamsMap = {}; // teamId -> { name, emoji, score, memberNames }
 let unsubscribeGuesses = null;
+let guessCountdownInterval = null;
+let autoRevealTimeout = null;
+let roundRevealed = false;
 
 function generateRoomCode() {
   let code = "";
@@ -101,7 +107,7 @@ async function ensureRoom() {
           phase: "lobby",
           roundIndex: 0,
           revealedAnswer: null,
-          currentOptions: [],
+          guessDeadline: null,
           createdAt: serverTimestamp(),
         });
         roomCode = candidate;
@@ -111,11 +117,17 @@ async function ensureRoom() {
     if (!roomCode) return;
     els.roomCodeDisplay.textContent = roomCode;
 
-    onSnapshot(collection(db, "rooms", roomCode, "players"), (snap) => {
-      playersMap = {};
-      snap.forEach((d) => (playersMap[d.id] = d.data()));
-      const n = Object.keys(playersMap).length;
-      els.playerCount.textContent = n === 1 ? "1 player joined" : `${n} players joined`;
+    await publishMovieIndex();
+
+    onSnapshot(collection(db, "rooms", roomCode, "teams"), (snap) => {
+      teamsMap = {};
+      snap.forEach((d) => (teamsMap[d.id] = d.data()));
+      const teamCount = Object.keys(teamsMap).length;
+      const playerCount = Object.values(teamsMap).reduce((sum, t) => sum + (t.memberNames?.length || 0), 0);
+      els.playerCount.textContent =
+        teamCount === 0
+          ? "0 teams joined"
+          : `${teamCount} team${teamCount === 1 ? "" : "s"}, ${playerCount} player${playerCount === 1 ? "" : "s"} joined`;
     });
   } catch (err) {
     els.playerCount.textContent = "Room sync unavailable — playing local-only.";
@@ -123,19 +135,27 @@ async function ensureRoom() {
   }
 }
 
-function pickDistractors(correctTitle, count) {
-  const pool = [...new Set(clips.map((c) => c.movieTitle))].filter((t) => t !== correctTitle);
-  return shuffle(pool).slice(0, count);
+// Players never see which clip is playing, but they do need to know what
+// movie titles/directors exist in the library to autocomplete/correct
+// against — that's safe to publish since it doesn't reveal THIS round's
+// answer, just the word bank.
+async function publishMovieIndex() {
+  if (!roomCode) return;
+  const titles = [...new Set(clips.map((c) => c.movieTitle).filter(Boolean))].sort();
+  const directors = [...new Set(clips.map((c) => c.director).filter(Boolean))].sort();
+  await setDoc(doc(db, "rooms", roomCode, "public", "movieIndex"), { titles, directors }).catch((err) =>
+    console.error("publishMovieIndex failed", err)
+  );
 }
 
 async function startRoundInFirestore(clip) {
   if (!roomCode) return;
   try {
     currentRoundIndex += 1;
-    const options = shuffle([clip.movieTitle, ...pickDistractors(clip.movieTitle, 3)]);
+    roundRevealed = false;
     await setDoc(
       doc(db, "rooms", roomCode),
-      { phase: "playing", roundIndex: currentRoundIndex, revealedAnswer: null, currentOptions: options },
+      { phase: "playing", roundIndex: currentRoundIndex, revealedAnswer: null, guessDeadline: null },
       { merge: true }
     );
     await setDoc(doc(db, "rooms", roomCode, "private", "answer"), {
@@ -163,23 +183,98 @@ function attachGuessListener(roundIndex) {
   unsubscribeGuesses = onSnapshot(ref, (snap) => {
     currentGuesses = {};
     snap.forEach((d) => (currentGuesses[d.id] = d.data()));
-    const n = Object.keys(currentGuesses).length;
-    els.guessCount.textContent = n === 1 ? "1 player has answered" : `${n} players have answered`;
+    const teamsAnswered = new Set(Object.values(currentGuesses).map((g) => g.teamId)).size;
+    els.guessCount.textContent = teamsAnswered === 1 ? "1 team has answered" : `${teamsAnswered} teams have answered`;
   });
+}
+
+function startGuessWindow() {
+  const deadline = Date.now() + GUESS_WINDOW_MS;
+  if (roomCode) {
+    updateDoc(doc(db, "rooms", roomCode), { phase: "guessing", guessDeadline: deadline }).catch((err) =>
+      console.error("startGuessWindow failed", err)
+    );
+  }
+
+  if (guessCountdownInterval) clearInterval(guessCountdownInterval);
+  guessCountdownInterval = setInterval(() => {
+    const remaining = Math.max(0, Math.round((deadline - Date.now()) / 1000));
+    els.guessTimer.textContent = remaining;
+    if (remaining <= 0) {
+      clearInterval(guessCountdownInterval);
+      guessCountdownInterval = null;
+    }
+  }, 250);
+
+  if (autoRevealTimeout) clearTimeout(autoRevealTimeout);
+  autoRevealTimeout = setTimeout(() => {
+    if (!roundRevealed) performReveal();
+  }, GUESS_WINDOW_MS);
+}
+
+function stopGuessWindow() {
+  if (guessCountdownInterval) {
+    clearInterval(guessCountdownInterval);
+    guessCountdownInterval = null;
+  }
+  if (autoRevealTimeout) {
+    clearTimeout(autoRevealTimeout);
+    autoRevealTimeout = null;
+  }
+}
+
+// One guess per team per round: the earliest submission among a team's
+// members is treated as the team's official answer ("collaborate, then
+// whoever types it first locks it in" — matches how they'll actually play
+// sitting in the same room).
+function earliestGuessPerTeam() {
+  const byTeam = {};
+  for (const guess of Object.values(currentGuesses)) {
+    if (!guess.teamId) continue;
+    const existing = byTeam[guess.teamId];
+    const t = guess.submittedAt?.toMillis?.() ?? 0;
+    if (!existing || t < existing._t) {
+      byTeam[guess.teamId] = { ...guess, _t: t };
+    }
+  }
+  return byTeam;
+}
+
+function normalize(s) {
+  return (s || "").trim().toLowerCase();
 }
 
 async function revealInFirestore(clip) {
   if (!roomCode) return { rows: [] };
   const rows = [];
   try {
-    for (const [uid, guess] of Object.entries(currentGuesses)) {
-      const correct = guess.choice === clip.movieTitle;
-      const name = (playersMap[uid] && playersMap[uid].name) || "Player";
-      rows.push({ name, choice: guess.choice, correct });
-      if (correct) {
-        await updateDoc(doc(db, "rooms", roomCode, "players", uid), { score: increment(1) }).catch(() => {});
+    const byTeam = earliestGuessPerTeam();
+    for (const [teamId, guess] of Object.entries(byTeam)) {
+      const team = teamsMap[teamId] || { name: "Unknown team", emoji: "❓" };
+      const movieOk = normalize(guess.movieGuess) === normalize(clip.movieTitle);
+      const directorOk = normalize(guess.directorGuess) === normalize(clip.director);
+      const yearOk = String(guess.yearGuess || "").trim() === String(clip.year || "").trim();
+      const points = (movieOk ? 1 : 0) + (directorOk ? 1 : 0) + (yearOk ? 1 : 0);
+
+      rows.push({
+        teamId,
+        name: team.name,
+        emoji: team.emoji,
+        movieGuess: guess.movieGuess,
+        directorGuess: guess.directorGuess,
+        yearGuess: guess.yearGuess,
+        movieOk,
+        directorOk,
+        yearOk,
+        points,
+      });
+
+      if (points > 0) {
+        await updateDoc(doc(db, "rooms", roomCode, "teams", teamId), { score: increment(points) }).catch(() => {});
       }
     }
+    rows.sort((a, b) => b.points - a.points);
+
     await updateDoc(doc(db, "rooms", roomCode), {
       phase: "revealed",
       revealedAnswer: {
@@ -198,7 +293,7 @@ async function revealInFirestore(clip) {
 
 async function returnToLobby() {
   if (!roomCode) return;
-  await updateDoc(doc(db, "rooms", roomCode), { phase: "lobby" }).catch(() => {});
+  await updateDoc(doc(db, "rooms", roomCode), { phase: "lobby", guessDeadline: null }).catch(() => {});
 }
 
 // ---------- Clip library ----------
@@ -235,6 +330,7 @@ function refreshLibrary() {
     return;
   }
   initQueue();
+  publishMovieIndex();
   showIdle();
 }
 
@@ -356,6 +452,8 @@ function finishClip() {
   ytPlayer.pauseVideo();
   els.hud.hidden = true;
   showPanel("ended");
+  els.guessTimer.textContent = "60";
+  startGuessWindow();
 }
 
 els.stopEarlyBtn.addEventListener("click", finishClip);
@@ -370,11 +468,15 @@ els.startBtn.addEventListener("click", async () => {
   }
   const idx = queue.pop();
   const clip = clips[idx];
-  await startRoundInFirestore(clip); // fast (<1s typically); players need options before guessing
+  await startRoundInFirestore(clip); // fast (<1s typically); players need this before guessing
   playClip(clip);
 });
 
-els.revealBtn.addEventListener("click", async () => {
+async function performReveal() {
+  if (roundRevealed || !currentClip) return;
+  roundRevealed = true;
+  stopGuessWindow();
+
   const c = currentClip;
   els.answerTitle.textContent = `${c.movieTitle}${c.year ? ` (${c.year})` : ""}`;
   const parts = [];
@@ -387,14 +489,20 @@ els.revealBtn.addEventListener("click", async () => {
   els.resultsList.innerHTML = rows.length
     ? rows
         .map(
-          (r) =>
-            `<div class="${r.correct ? "result-correct" : "result-wrong"}">${escapeHtml(r.name)}: ${escapeHtml(r.choice)} ${r.correct ? "✓" : "✗"}</div>`
+          (r) => `<div>
+            ${r.emoji} <strong>${escapeHtml(r.name)}</strong> — ${r.points} pt${r.points === 1 ? "" : "s"}<br>
+            <span class="${r.movieOk ? "result-correct" : "result-wrong"}">Movie: ${escapeHtml(r.movieGuess || "—")} ${r.movieOk ? "✓" : "✗"}</span> ·
+            <span class="${r.directorOk ? "result-correct" : "result-wrong"}">Director: ${escapeHtml(r.directorGuess || "—")} ${r.directorOk ? "✓" : "✗"}</span> ·
+            <span class="${r.yearOk ? "result-correct" : "result-wrong"}">Year: ${escapeHtml(String(r.yearGuess || "—"))} ${r.yearOk ? "✓" : "✗"}</span>
+          </div>`
         )
         .join("")
-    : '<div class="hint">No one answered this round.</div>';
+    : '<div class="hint">No team answered this round.</div>';
 
   showPanel("answer");
-});
+}
+
+els.revealBtn.addEventListener("click", performReveal);
 
 els.nextBtn.addEventListener("click", async () => {
   await returnToLobby();
