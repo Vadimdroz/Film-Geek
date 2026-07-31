@@ -50,9 +50,8 @@ const els = {
 
   playerTimer: document.getElementById("player-timer"),
   movieInput: document.getElementById("movie-input"),
-  movieList: document.getElementById("movie-list"),
+  movieCorrection: document.getElementById("movie-correction"),
   directorInput: document.getElementById("director-input"),
-  directorList: document.getElementById("director-list"),
   directorCorrection: document.getElementById("director-correction"),
   yearInput: document.getElementById("year-input"),
   submitGuessBtn: document.getElementById("submit-guess-btn"),
@@ -164,85 +163,61 @@ function renderEmojiGrid() {
 }
 renderEmojiGrid();
 
-// ---------- Autocomplete ----------
+// ---------- Suggestions ----------
+// No live-as-you-type dropdown — suggestions only appear once the player
+// finishes typing and presses Enter (or submits), and only as a "Did you
+// mean X?" they must click to accept, never a silent auto-fill. This
+// applies the same way to both the movie title and director fields.
 
-function setupAutocomplete(input, listEl, candidates) {
-  input.addEventListener("input", () => {
-    const q = input.value.trim().toLowerCase();
-    listEl.innerHTML = "";
-    if (!q) {
-      listEl.hidden = true;
-      return;
-    }
-    const matches = candidates.filter((c) => c.toLowerCase().includes(q)).slice(0, 8);
-    if (matches.length === 0) {
-      listEl.hidden = true;
-      return;
-    }
-    matches.forEach((m) => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.textContent = m;
-      btn.addEventListener("click", () => {
-        input.value = m;
-        listEl.hidden = true;
-        listEl.innerHTML = "";
-        if (input === els.directorInput) els.directorCorrection.hidden = true;
-      });
-      listEl.appendChild(btn);
+function clearSuggestion(correctionEl) {
+  correctionEl.hidden = true;
+  correctionEl.innerHTML = "";
+}
+
+function checkForSuggestion(input, correctionEl, candidates) {
+  clearSuggestion(correctionEl);
+  const val = input.value.trim();
+  if (!val || candidates.length === 0) return;
+
+  const exact = candidates.find((c) => c.toLowerCase() === val.toLowerCase());
+  if (exact) {
+    input.value = exact; // just canonicalizing casing, not a real correction
+    return;
+  }
+
+  const nearest = nearestMatch(val, candidates);
+  if (nearest) {
+    correctionEl.hidden = false;
+    const label = document.createElement("span");
+    label.textContent = "Did you mean ";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "suggestion-btn";
+    btn.textContent = nearest.match;
+    btn.addEventListener("click", () => {
+      input.value = nearest.match;
+      clearSuggestion(correctionEl);
     });
-    listEl.hidden = false;
-  });
+    const question = document.createElement("span");
+    question.textContent = "?";
+    correctionEl.appendChild(label);
+    correctionEl.appendChild(btn);
+    correctionEl.appendChild(question);
+  }
+}
 
-  input.addEventListener("blur", () => {
-    setTimeout(() => {
-      listEl.hidden = true;
-    }, 150);
+function setupSuggestionCheck(input, correctionEl, getCandidates) {
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      checkForSuggestion(input, correctionEl, getCandidates());
+    }
   });
 }
 
 function setupAutocompletes() {
-  setupAutocomplete(els.movieInput, els.movieList, movieIndex.titles);
-  setupAutocomplete(els.directorInput, els.directorList, movieIndex.directors);
-
-  els.directorInput.addEventListener("blur", () => {
-    setTimeout(() => {
-      const val = els.directorInput.value.trim();
-      els.directorCorrection.hidden = true;
-      els.directorCorrection.innerHTML = "";
-      if (!val || movieIndex.directors.length === 0) return;
-
-      const exact = movieIndex.directors.find((d) => d.toLowerCase() === val.toLowerCase());
-      if (exact) {
-        els.directorInput.value = exact; // just canonicalizing casing, not a real correction
-        return;
-      }
-
-      // A genuine typo gets offered as a suggestion to confirm, never
-      // silently applied — the player's own typed text stays as-is
-      // unless they click to accept it.
-      const nearest = nearestMatch(val, movieIndex.directors);
-      if (nearest) {
-        els.directorCorrection.hidden = false;
-        const label = document.createElement("span");
-        label.textContent = "Did you mean ";
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "suggestion-btn";
-        btn.textContent = nearest.match;
-        btn.addEventListener("click", () => {
-          els.directorInput.value = nearest.match;
-          els.directorCorrection.hidden = true;
-          els.directorCorrection.innerHTML = "";
-        });
-        const question = document.createElement("span");
-        question.textContent = "?";
-        els.directorCorrection.appendChild(label);
-        els.directorCorrection.appendChild(btn);
-        els.directorCorrection.appendChild(question);
-      }
-    }, 160);
-  });
+  setupSuggestionCheck(els.movieInput, els.movieCorrection, () => movieIndex.titles);
+  setupSuggestionCheck(els.directorInput, els.directorCorrection, () => movieIndex.directors);
 }
 
 // ---------- Join ----------
@@ -381,7 +356,8 @@ function attachRoundGuessListener(roundIndex) {
   els.movieInput.value = "";
   els.directorInput.value = "";
   els.yearInput.value = "";
-  els.directorCorrection.hidden = true;
+  clearSuggestion(els.movieCorrection);
+  clearSuggestion(els.directorCorrection);
 
   const ref = collection(db, "rooms", roomCode, "rounds", String(roundIndex), "guesses");
   unsubGuesses = onSnapshot(ref, (snap) => {
