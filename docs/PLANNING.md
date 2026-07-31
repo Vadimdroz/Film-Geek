@@ -58,23 +58,24 @@
 ### I. Suggested build order (MVP milestones)
 1. ✅ Manual tagging tool + hand-picked clips (localStorage for now, Firestore sync is a later nice-to-have).
 2. ✅ Host display that plays a clip cleanly with the answer hidden.
-3. ✅ Room code + phones joining as players, multiple-choice guessing works.
-4. Scoring is wired (host tallies + updates player scores on reveal) — still needs a real multi-player playtest.
-5. PC-TV kiosk polish, then the phone-mirroring fallback.
+3. ✅ Room code + phones joining as teams; team-based 3-field guessing (movie/director/year), 60s timer, live leaderboard.
+4. ✅ Scoring is wired (host tallies each team's earliest per-round submission, +1 per correct field, updates team score on reveal).
+5. PC-TV kiosk polish, then the phone-mirroring fallback. Still untested: a real multi-team playtest with a full 30–50 clip library.
 
-### K. Firestore data model (milestone 3)
-Firebase project: `film-geek` (separate from other personal projects). Everyone — host and players — signs in anonymously (silent, no login UI) so security rules have a `request.auth.uid` to check against.
+### K. Firestore data model (milestone 3, team-based)
+Firebase project: `film-geek` (separate from other personal projects). Everyone — host and players — signs in anonymously (silent, no login UI) so security rules have a `request.auth.uid` to check against. Scoring is per-**team**, not per-player: players join/create a team (name + emoji avatar) on the join screen, and the first team member to submit each round locks in that team's answer.
 
 ```
-rooms/{roomCode}                        — public: hostUid, phase, roundIndex, currentOptions, revealedAnswer
+rooms/{roomCode}                        — public: hostUid, phase (lobby|playing|guessing|revealed), roundIndex, guessDeadline, revealedAnswer
+rooms/{roomCode}/public/movieIndex      — public: distinct { titles[], directors[] } across the whole tagged library — safe to expose (doesn't say which is THIS round's answer), used for player autocomplete/typo-correction
 rooms/{roomCode}/private/answer         — host-only: the real movieTitle/year/director/cast for the current clip
-rooms/{roomCode}/players/{uid}          — name, score (each player writes only their own doc)
-rooms/{roomCode}/rounds/{roundIndex}/guesses/{uid} — a player's submitted choice for that round
+rooms/{roomCode}/teams/{teamId}         — name, emoji, score, memberNames[] (open read/write among signed-in users — private friends game, not defended against cheating)
+rooms/{roomCode}/rounds/{roundIndex}/guesses/{uid} — { teamId, movieGuess, directorGuess, yearGuess, submittedAt }
 ```
 
 The split between the public room doc and the host-only `private/answer` doc is what stops a player from opening devtools and reading the answer out of Firestore before reveal — see `/firestore.rules` for the exact rules (paste into Firebase Console → Firestore Database → Rules → Publish).
 
-Multiple-choice options are generated from other tagged movie titles in the library as distractors; with a small library this degrades to 2 options, and below 2 the player app falls back to a free-text guess for that round.
+Movie title and director inputs get a filtered-as-you-type dropdown sourced from `public/movieIndex`; director additionally gets typo-corrected against that same list via Levenshtein distance on blur (e.g. "Clint Eastwod" → "Clint Eastwood"). Scoring: exact-match (case-insensitive) on movie title and director, exact string match on year, 1 point each, max 3/round. 60-second countdown starts when the clip ends (not when it starts); host auto-reveals if the timer runs out without a manual reveal click.
 
 ### J. Risks to watch, not solve now
 - Per-video embed restrictions and regional availability changing over time.
