@@ -11,7 +11,7 @@
 
 <header id="top-bar" hidden>
   <span id="top-room">Room ----</span>
-  <span id="top-score">Score: 0</span>
+  <span id="top-team">—</span>
   <button id="leave-room-btn">Leave room</button>
 </header>
 
@@ -22,41 +22,62 @@
     <label>Room code
       <input id="room-code-input" type="text" maxlength="4" autocapitalize="characters" autocomplete="off" placeholder="ABCD" />
     </label>
+    <label>Team name
+      <input id="team-name-input" type="text" maxlength="24" autocomplete="off" placeholder="e.g. The Velociraptors" />
+    </label>
+    <p class="hint">If that team already exists in the room, you'll join it. Otherwise you're starting it.</p>
     <label>Your name
       <input id="name-input" type="text" maxlength="24" autocomplete="off" placeholder="Your name" />
+    </label>
+    <label>Pick a team avatar
+      <div id="emoji-grid" class="emoji-grid"></div>
+      <p class="hint">Only matters if you're starting a new team — joining an existing one keeps its avatar.</p>
     </label>
     <button id="join-btn" class="giant-btn">Join</button>
     <p id="join-error" class="error-text"></p>
   </section>
 
   <section id="waiting-screen" class="screen" hidden>
-    <h1>You're in!</h1>
-    <p class="hint">Waiting for the host to start the next round…</p>
+    <h1 id="waiting-title">You're in!</h1>
+    <p id="waiting-message" class="hint">Waiting for the host to start the next round…</p>
   </section>
 
   <section id="guessing-screen" class="screen" hidden>
-    <h1>What movie is this?</h1>
-    <div id="guess-options"></div>
-    <div id="guess-freetext" hidden>
-      <input id="guess-freetext-input" type="text" placeholder="Type your guess" autocomplete="off" />
-      <button id="guess-freetext-btn" class="giant-btn">Submit</button>
-    </div>
+    <p class="timer-display"><span id="player-timer">60</span>s left</p>
+    <label>Movie title
+      <input id="movie-input" autocomplete="off" placeholder="Start typing…" />
+      <div id="movie-list" class="autocomplete-list" hidden></div>
+    </label>
+    <label>Director
+      <input id="director-input" autocomplete="off" placeholder="Start typing…" />
+      <div id="director-list" class="autocomplete-list" hidden></div>
+      <p id="director-correction" class="hint" hidden></p>
+    </label>
+    <label>Year
+      <input id="year-input" type="number" inputmode="numeric" placeholder="e.g. 1994" />
+    </label>
+    <button id="submit-guess-btn" class="giant-btn">Lock in answer</button>
   </section>
 
   <section id="locked-screen" class="screen" hidden>
     <h1>Answer locked in</h1>
-    <p class="hint">You guessed:</p>
-    <p id="locked-choice" class="locked-choice"></p>
+    <p class="hint">Your team answered:</p>
+    <p id="locked-summary" class="locked-choice"></p>
     <p class="hint">Waiting for the reveal…</p>
   </section>
 
   <section id="revealed-screen" class="screen" hidden>
     <h1 id="revealed-title"></h1>
     <p id="revealed-meta" class="hint"></p>
-    <p id="revealed-your-guess" class="your-guess"></p>
+    <div id="revealed-breakdown" class="revealed-breakdown"></div>
     <p class="hint">Next round starting soon…</p>
   </section>
 </main>
+
+<div id="leaderboard" hidden>
+  <h2>🏆 Leaderboard</h2>
+  <div id="leaderboard-list"></div>
+</div>
 
 <script type="module" src="app.js"></script>
 </body>
