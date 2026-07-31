@@ -127,8 +127,10 @@ function nearestMatch(input, candidates) {
     }
   }
   if (!best) return null;
-  const threshold = Math.max(2, Math.floor(best.length * 0.4));
-  return bestDist <= threshold ? { match: best, distance: bestDist } : null;
+  // Only offer a suggestion for genuinely close typos (up to 4 letters
+  // off) — beyond that it's more likely a different name entirely, and
+  // suggesting it would be more confusing than helpful.
+  return bestDist <= 4 ? { match: best, distance: bestDist } : null;
 }
 
 // ---------- Screens ----------
@@ -206,20 +208,38 @@ function setupAutocompletes() {
   els.directorInput.addEventListener("blur", () => {
     setTimeout(() => {
       const val = els.directorInput.value.trim();
+      els.directorCorrection.hidden = true;
+      els.directorCorrection.innerHTML = "";
       if (!val || movieIndex.directors.length === 0) return;
+
       const exact = movieIndex.directors.find((d) => d.toLowerCase() === val.toLowerCase());
       if (exact) {
-        els.directorInput.value = exact;
-        els.directorCorrection.hidden = true;
+        els.directorInput.value = exact; // just canonicalizing casing, not a real correction
         return;
       }
+
+      // A genuine typo gets offered as a suggestion to confirm, never
+      // silently applied — the player's own typed text stays as-is
+      // unless they click to accept it.
       const nearest = nearestMatch(val, movieIndex.directors);
       if (nearest) {
-        els.directorInput.value = nearest.match;
-        els.directorCorrection.textContent = `Auto-corrected to "${nearest.match}"`;
         els.directorCorrection.hidden = false;
-      } else {
-        els.directorCorrection.hidden = true;
+        const label = document.createElement("span");
+        label.textContent = "Did you mean ";
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "suggestion-btn";
+        btn.textContent = nearest.match;
+        btn.addEventListener("click", () => {
+          els.directorInput.value = nearest.match;
+          els.directorCorrection.hidden = true;
+          els.directorCorrection.innerHTML = "";
+        });
+        const question = document.createElement("span");
+        question.textContent = "?";
+        els.directorCorrection.appendChild(label);
+        els.directorCorrection.appendChild(btn);
+        els.directorCorrection.appendChild(question);
       }
     }, 160);
   });
