@@ -1,14 +1,17 @@
 // Film-Geek host display — vanilla JS, no build step.
-// Reads the same clip library the admin-tagging tool writes to (same-origin
-// localStorage). Room/round state syncs to Firestore so player phones can
-// join teams and submit guesses; the answer itself is written to a
-// host-only "private" doc so it's never readable from a player's browser
-// before reveal. Scoring is per-team, not per-player.
+// Reads the same clip library the admin-tagging tool writes to Firestore
+// (clipLibrary/{id}) — that's the durable source of truth, with
+// localStorage kept only as an offline fallback. Room/round state syncs
+// to Firestore so player phones can join teams and submit guesses; the
+// answer itself is written to a host-only "private" doc so it's never
+// readable from a player's browser before reveal. Scoring is per-team,
+// not per-player.
 
 import { db, authReady } from "../shared/firebase.js";
 import {
   doc,
   getDoc,
+  getDocs,
   setDoc,
   updateDoc,
   onSnapshot,
@@ -327,8 +330,11 @@ async function returnToLobby() {
 }
 
 // ---------- Clip library ----------
+// Firestore (clipLibrary/{id}) is the durable source of truth, written by
+// the admin-tagging tool. localStorage is kept only as an offline/fallback
+// mirror, refreshed every time the cloud fetch succeeds.
 
-function loadClips() {
+function loadClipsFromLocalStorage() {
   try {
     return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
   } catch {
@@ -338,6 +344,16 @@ function loadClips() {
 
 function saveClips(list) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+}
+
+async function fetchClipsFromCloud() {
+  const user = await authReady;
+  void user;
+  const snap = await getDocs(collection(db, "clipLibrary"));
+  const list = [];
+  snap.forEach((d) => list.push({ id: d.id, ...d.data() }));
+  list.sort((a, b) => (a.addedAt || "").localeCompare(b.addedAt || ""));
+  return list;
 }
 
 function shuffle(arr) {
@@ -353,14 +369,22 @@ function initQueue() {
   queue = shuffle(clips.map((_, i) => i));
 }
 
-function refreshLibrary() {
-  clips = loadClips();
+async function refreshLibrary() {
+  try {
+    const cloudClips = await fetchClipsFromCloud();
+    clips = cloudClips.length > 0 ? cloudClips : loadClipsFromLocalStorage();
+    saveClips(clips); // keep the local mirror fresh
+  } catch (err) {
+    console.error("Cloud clip fetch failed, falling back to local cache", err);
+    clips = loadClipsFromLocalStorage();
+  }
+
   if (clips.length === 0) {
     showPanel("no-clips");
     return;
   }
   initQueue();
-  publishMovieIndex();
+  await publishMovieIndex();
   showIdle();
 }
 
@@ -591,19 +615,11 @@ els.importInput.addEventListener("change", async (e) => {
     const imported = JSON.parse(text);
     if (!Array.isArray(imported)) throw new Error("Expected a JSON array of clips.");
 
-    const existing = loadClips();
-    imported.forEach((incoming) => {
-      const dupeIndex = existing.findIndex(
-        (c) => c.youtubeId === incoming.youtubeId && c.startSec === incoming.startSec && c.endSec === incoming.endSec
-      );
-      if (dupeIndex >= 0) {
-        existing[dupeIndex] = incoming;
-      } else {
-        existing.push(incoming);
-      }
-    });
-    saveClips(existing);
-    refreshLibrary();
+    for (const incoming of imported) {
+      const id = `${incoming.youtubeId}_${incoming.startSec}_${incoming.endSec}`;
+      await setDoc(doc(db, "clipLibrary", id), incoming);
+    }
+    await refreshLibrary();
   } catch (err) {
     alert(`Import failed: ${err.message}`);
   } finally {
@@ -613,5 +629,5 @@ els.importInput.addEventListener("change", async (e) => {
 
 // ---------- Init ----------
 
-refreshLibrary();
+await refreshLibrary();
 ensureRoom();
