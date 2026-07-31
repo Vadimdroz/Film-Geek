@@ -33,6 +33,7 @@ const els = {
   screens: {
     join: document.getElementById("join-screen"),
     waiting: document.getElementById("waiting-screen"),
+    audioChoice: document.getElementById("audio-choice-screen"),
     guessing: document.getElementById("guessing-screen"),
     locked: document.getElementById("locked-screen"),
     revealed: document.getElementById("revealed-screen"),
@@ -47,6 +48,10 @@ const els = {
 
   waitingTitle: document.getElementById("waiting-title"),
   waitingMessage: document.getElementById("waiting-message"),
+
+  audioPlayerTimer: document.getElementById("audio-player-timer"),
+  answerNowBtn: document.getElementById("answer-now-btn"),
+  goToVideoBtn: document.getElementById("go-to-video-btn"),
 
   playerTimer: document.getElementById("player-timer"),
   movieInput: document.getElementById("movie-input"),
@@ -388,7 +393,17 @@ function handleRoomUpdate(data) {
     attachRoundGuessListener(data.roundIndex);
   }
 
-  if (data.phase === "playing") {
+  if (data.phase === "audio") {
+    if (isMyTurn()) {
+      startCountdown(data.audioDeadline, els.audioPlayerTimer);
+      showScreen("audioChoice");
+    } else {
+      stopCountdown();
+      els.waitingTitle.textContent = "🔊 Listen up!";
+      els.waitingMessage.textContent = `${activeTeamLabel()} is hearing the audio — watch for what happens next.`;
+      showScreen("waiting");
+    }
+  } else if (data.phase === "playing") {
     stopCountdown();
     if (isMyTurn()) {
       els.waitingTitle.textContent = "🎬 Your turn!";
@@ -419,6 +434,30 @@ function handleRoomUpdate(data) {
   }
 }
 
+// ---------- Audio-only choice ----------
+
+els.answerNowBtn.addEventListener("click", () => submitAudioChoice("answer_now"));
+els.goToVideoBtn.addEventListener("click", () => submitAudioChoice("go_to_video"));
+
+async function submitAudioChoice(choice) {
+  els.answerNowBtn.disabled = true;
+  els.goToVideoBtn.disabled = true;
+  try {
+    await updateDoc(doc(db, "rooms", roomCode, "teams", teamId), {
+      audioChoice: choice,
+      audioChoiceRound: lastSeenRoundIndex,
+    });
+    // The host reacts to this on the team doc and changes the room's
+    // phase, which our own room listener will pick up and move us on —
+    // no need to switch screens manually here.
+  } catch (err) {
+    alert(`Couldn't send your choice: ${err.message}`);
+  } finally {
+    els.answerNowBtn.disabled = false;
+    els.goToVideoBtn.disabled = false;
+  }
+}
+
 function renderGuessingOrLocked() {
   if (myTeamGuessThisRound) {
     showLocked(myTeamGuessThisRound);
@@ -434,11 +473,11 @@ function showLocked(guess) {
 
 // ---------- Countdown ----------
 
-function startCountdown(deadline) {
+function startCountdown(deadline, targetEl = els.playerTimer) {
   stopCountdown();
   const tick = () => {
     const remaining = Math.max(0, Math.round((deadline - Date.now()) / 1000));
-    els.playerTimer.textContent = remaining;
+    targetEl.textContent = remaining;
     if (remaining <= 0 && countdownInterval) {
       clearInterval(countdownInterval);
       countdownInterval = null;
