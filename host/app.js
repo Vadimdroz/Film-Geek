@@ -425,13 +425,27 @@ els.errorSkipBtn.addEventListener("click", async () => {
   }
 });
 
+// YouTube shows a brief title/info overlay for the first couple seconds
+// whenever a video starts playing — this happens even with controls
+// disabled, it's a separate "just started" overlay, not the normal
+// control bar. Starting slightly before the tagged startSec (hidden
+// behind our cover) and revealing only after this buffer means viewers
+// never see it, and the visible window still matches exactly what was
+// tagged. If startSec is smaller than the buffer, we lose a bit of the
+// front of the clip instead — a fine trade next to leaking the title.
+const TITLE_OVERLAY_BUFFER_SEC = 2.5;
+
 function playClip(clip) {
   currentClip = clip;
-  els.cover.hidden = true;
-  els.hud.hidden = false;
+  const bufferedStart = Math.max(0, clip.startSec - TITLE_OVERLAY_BUFFER_SEC);
 
-  ytPlayer.loadVideoById({ videoId: clip.youtubeId, startSeconds: clip.startSec });
+  ytPlayer.loadVideoById({ videoId: clip.youtubeId, startSeconds: bufferedStart });
   ytPlayer.playVideo();
+
+  setTimeout(() => {
+    els.cover.hidden = true;
+    els.hud.hidden = false;
+  }, TITLE_OVERLAY_BUFFER_SEC * 1000);
 
   if (endWatcher) clearInterval(endWatcher);
   endWatcher = setInterval(() => {
