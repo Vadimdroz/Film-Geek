@@ -25,6 +25,13 @@ service cloud.firestore {
         get(/databases/$(database)/documents/rooms/$(roomCode)).data.hostUid == request.auth.uid;
     }
 
+    // Shared clip library, independent of any room — this is the durable
+    // source of truth the admin-tagging tool writes to and the host
+    // reads from, instead of relying on one browser's localStorage.
+    match /clipLibrary/{clipId} {
+      allow read, write: if isSignedIn();
+    }
+
     match /rooms/{roomCode} {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && request.resource.data.hostUid == request.auth.uid;
