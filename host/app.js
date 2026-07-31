@@ -51,7 +51,9 @@ const els = {
   answerPanel: document.getElementById("answer-panel"),
   answerTitle: document.getElementById("answer-title"),
   answerMeta: document.getElementById("answer-meta"),
-  resultsList: document.getElementById("results-list"),
+  roundResultBanner: document.getElementById("round-result-banner"),
+  roundBreakdown: document.getElementById("round-breakdown"),
+  scoreboardList: document.getElementById("scoreboard-list"),
   nextBtn: document.getElementById("next-btn"),
 
   allDonePanel: document.getElementById("all-done-panel"),
@@ -566,20 +568,47 @@ async function performReveal() {
   els.answerMeta.innerHTML = parts.join("<br>");
 
   const { rows } = await revealInFirestore(c);
-  els.resultsList.innerHTML = rows.length
-    ? rows
+  const activeRow = rows[0]; // at most one row now: only the active team's turn counts
+
+  if (activeRow) {
+    const activeTeam = teamsMap[activeRow.teamId] || {};
+    els.roundResultBanner.className = `round-result-banner ${activeRow.points > 0 ? "win" : "lose"}`;
+    els.roundResultBanner.textContent =
+      activeRow.points > 0
+        ? `${activeTeam.emoji || ""} ${activeRow.name} scored +${activeRow.points} points!`
+        : `${activeTeam.emoji || ""} ${activeRow.name} scored 0 points this round.`;
+    els.roundBreakdown.innerHTML = `
+      <span class="${activeRow.movieOk ? "result-correct" : "result-wrong"}">Movie: ${escapeHtml(activeRow.movieGuess || "—")} ${activeRow.movieOk ? "✓" : "✗"}</span><br>
+      <span class="${activeRow.directorOk ? "result-correct" : "result-wrong"}">Director: ${escapeHtml(activeRow.directorGuess || "—")} ${activeRow.directorOk ? "✓" : "✗"}</span><br>
+      <span class="${activeRow.yearOk ? "result-correct" : "result-wrong"}">Year: ${escapeHtml(String(activeRow.yearGuess || "—"))} ${activeRow.yearOk ? "✓" : "✗"}</span>
+    `;
+  } else {
+    els.roundResultBanner.className = "round-result-banner lose";
+    els.roundResultBanner.textContent = "No team answered this round.";
+    els.roundBreakdown.innerHTML = "";
+  }
+
+  renderScoreboard(activeRow);
+  showPanel("answer");
+}
+
+function renderScoreboard(activeRow) {
+  const standings = Object.entries(teamsMap).map(([id, team]) => ({
+    id,
+    name: team.name,
+    emoji: team.emoji,
+    score: activeRow && activeRow.teamId === id ? activeRow.newTotal : team.score || 0,
+  }));
+  standings.sort((a, b) => b.score - a.score);
+
+  els.scoreboardList.innerHTML = standings.length
+    ? standings
         .map(
-          (r) => `<div>
-            ${r.emoji} <strong>${escapeHtml(r.name)}</strong> — +${r.points} this round (${r.newTotal} total)<br>
-            <span class="${r.movieOk ? "result-correct" : "result-wrong"}">Movie: ${escapeHtml(r.movieGuess || "—")} ${r.movieOk ? "✓" : "✗"}</span> ·
-            <span class="${r.directorOk ? "result-correct" : "result-wrong"}">Director: ${escapeHtml(r.directorGuess || "—")} ${r.directorOk ? "✓" : "✗"}</span> ·
-            <span class="${r.yearOk ? "result-correct" : "result-wrong"}">Year: ${escapeHtml(String(r.yearGuess || "—"))} ${r.yearOk ? "✓" : "✗"}</span>
-          </div>`
+          (t) =>
+            `<div class="scoreboard-row${t.id === activeTeamId ? " active-row" : ""}"><span class="sb-name">${t.emoji} ${escapeHtml(t.name)}</span><span class="sb-score">${t.score}</span></div>`
         )
         .join("")
-    : '<div class="hint">No team answered this round.</div>';
-
-  showPanel("answer");
+    : '<div class="hint">No teams have joined yet.</div>';
 }
 
 els.revealBtn.addEventListener("click", performReveal);
