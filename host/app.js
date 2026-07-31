@@ -23,6 +23,7 @@ import {
 const STORAGE_KEY = "filmgeek_clips";
 const ROOM_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no I/O/0/1, easy to read aloud
 const GUESS_WINDOW_MS = 60000;
+const AUDIO_ONLY_WINDOW_MS = 15000;
 
 const els = {
   playerWrap: document.getElementById("player-wrap"),
@@ -42,6 +43,10 @@ const els = {
 
   noClipsPanel: document.getElementById("no-clips-panel"),
   importInput: document.getElementById("import-input"),
+
+  audioPanel: document.getElementById("audio-panel"),
+  audioTurnLabel: document.getElementById("audio-turn-label"),
+  audioTimer: document.getElementById("audio-timer"),
 
   endedPanel: document.getElementById("ended-panel"),
   guessTimer: document.getElementById("guess-timer"),
@@ -95,10 +100,17 @@ let guessCountdownInterval = null;
 let autoRevealTimeout = null;
 let roundRevealed = false;
 
+let roundAudioOnly = false; // true if the active team answered before ever seeing video this round
+let audioChoiceHandled = false;
+let audioCountdownInterval = null;
+let audioTimeout = null;
+
 // Points scale up sharply with how many of the 3 fields (movie/director/
 // year) a team got right, rather than 1 point per field — rewards a full
-// correct guess much more than a partial one.
+// correct guess much more than a partial one. Doubled if they answered
+// on audio alone, before ever seeing the video.
 const POINTS_BY_CORRECT_COUNT = { 0: 0, 1: 2, 2: 5, 3: 10 };
+const AUDIO_ONLY_MULTIPLIER = 2;
 
 // Stable turn order: whoever's team doc was created earliest goes first.
 // Rotates through teams currently in the room — if a team joins mid-game
@@ -150,6 +162,22 @@ async function ensureRoom() {
         teamCount === 0
           ? "0 teams joined"
           : `${teamCount} team${teamCount === 1 ? "" : "s"}, ${playerCount} player${playerCount === 1 ? "" : "s"} joined`;
+
+      // The active team can't write the room doc directly (only the host
+      // can), so they signal their audio-phase choice on their own team
+      // doc instead — which they're already allowed to write — and the
+      // host reacts to it here.
+      if (!audioChoiceHandled && activeTeamId && currentClip) {
+        const team = teamsMap[activeTeamId];
+        if (team && team.audioChoiceRound === currentRoundIndex && team.audioChoice) {
+          audioChoiceHandled = true;
+          if (team.audioChoice === "answer_now") {
+            skipToGuessing(currentClip);
+          } else if (team.audioChoice === "go_to_video") {
+            revealVideo(currentClip);
+          }
+        }
+      }
     });
   } catch (err) {
     els.playerCount.textContent = "Room sync unavailable — playing local-only.";
@@ -175,6 +203,8 @@ async function startRoundInFirestore(clip) {
   try {
     currentRoundIndex += 1;
     roundRevealed = false;
+    roundAudioOnly = false;
+    audioChoiceHandled = false;
     updateRoundIndicator();
 
     const teamOrder = getTeamOrder();
@@ -183,7 +213,14 @@ async function startRoundInFirestore(clip) {
 
     await setDoc(
       doc(db, "rooms", roomCode),
-      { phase: "playing", roundIndex: currentRoundIndex, revealedAnswer: null, guessDeadline: null, activeTeamId },
+      {
+        phase: "audio",
+        roundIndex: currentRoundIndex,
+        revealedAnswer: null,
+        guessDeadline: null,
+        audioDeadline: null,
+        activeTeamId,
+      },
       { merge: true }
     );
     await setDoc(doc(db, "rooms", roomCode, "private", "answer"), {
@@ -288,7 +325,7 @@ async function revealInFirestore(clip) {
       const directorOk = normalize(guess.directorGuess) === normalize(clip.director);
       const yearOk = String(guess.yearGuess || "").trim() === String(clip.year || "").trim();
       const correctCount = (movieOk ? 1 : 0) + (directorOk ? 1 : 0) + (yearOk ? 1 : 0);
-      const points = POINTS_BY_CORRECT_COUNT[correctCount];
+      const points = POINTS_BY_CORRECT_COUNT[correctCount] * (roundAudioOnly ? AUDIO_ONLY_MULTIPLIER : 1);
 
       rows.push({
         teamId,
@@ -397,6 +434,7 @@ async function refreshLibrary() {
 function showPanel(name) {
   els.idlePanel.hidden = name !== "idle";
   els.noClipsPanel.hidden = name !== "no-clips";
+  els.audioPanel.hidden = name !== "audio";
   els.endedPanel.hidden = name !== "ended";
   els.answerPanel.hidden = name !== "answer";
   els.allDonePanel.hidden = name !== "all-done";
@@ -478,6 +516,8 @@ function handlePlayerError(code) {
     clearInterval(endWatcher);
     endWatcher = null;
   }
+  stopAudioPhaseTimers(); // in case the error happened during the audio-only phase
+  audioChoiceHandled = true; // don't let a queued auto-continue fire after we've already shown an error
   els.hud.hidden = true;
   els.errorMessage.textContent =
     PLAYER_ERROR_MESSAGES[code] || `Player error (code ${code}) — this clip may need re-tagging.`;
@@ -503,9 +543,74 @@ els.errorSkipBtn.addEventListener("click", async () => {
 // front of the clip instead — a fine trade next to leaking the title.
 const TITLE_OVERLAY_BUFFER_SEC = 2.5;
 
-function playClip(clip) {
+// Audio-only phase: the clip plays (audio audible to the whole room) but
+// the cover stays up the entire time — video is never shown here, so the
+// TITLE_OVERLAY_BUFFER_SEC trick isn't needed yet (nothing's visible
+// regardless). The active team's phone offers "Answer now" (double
+// points, skips straight to guessing) or "Go to video" (normal points);
+// this auto-continues to video if neither is chosen in time.
+function startAudioPhase(clip) {
+  currentClip = clip;
+  roundAudioOnly = false;
+  audioChoiceHandled = false;
+  els.hud.hidden = true;
+  showPanel("audio");
+  els.audioTurnLabel.textContent = activeTeamId && teamsMap[activeTeamId] ? teamsMap[activeTeamId].name : "the team";
+  els.audioTimer.textContent = Math.round(AUDIO_ONLY_WINDOW_MS / 1000);
+
+  ytPlayer.loadVideoById({ videoId: clip.youtubeId, startSeconds: clip.startSec });
+  ytPlayer.playVideo();
+
+  const deadline = Date.now() + AUDIO_ONLY_WINDOW_MS;
+  if (roomCode) {
+    updateDoc(doc(db, "rooms", roomCode), { phase: "audio", audioDeadline: deadline }).catch((err) =>
+      console.error("startAudioPhase failed", err)
+    );
+  }
+
+  if (audioCountdownInterval) clearInterval(audioCountdownInterval);
+  audioCountdownInterval = setInterval(() => {
+    const remaining = Math.max(0, Math.round((deadline - Date.now()) / 1000));
+    els.audioTimer.textContent = remaining;
+    if (remaining <= 0) {
+      clearInterval(audioCountdownInterval);
+      audioCountdownInterval = null;
+    }
+  }, 250);
+
+  if (audioTimeout) clearTimeout(audioTimeout);
+  audioTimeout = setTimeout(() => {
+    if (!audioChoiceHandled) {
+      audioChoiceHandled = true;
+      revealVideo(clip);
+    }
+  }, AUDIO_ONLY_WINDOW_MS);
+}
+
+function stopAudioPhaseTimers() {
+  if (audioCountdownInterval) {
+    clearInterval(audioCountdownInterval);
+    audioCountdownInterval = null;
+  }
+  if (audioTimeout) {
+    clearTimeout(audioTimeout);
+    audioTimeout = null;
+  }
+}
+
+// The active team chose (or timed out into) seeing the video — clip
+// restarts from the very beginning, this time visible, normal scoring.
+function revealVideo(clip) {
+  stopAudioPhaseTimers();
+  roundAudioOnly = false;
   currentClip = clip;
   const bufferedStart = Math.max(0, clip.startSec - TITLE_OVERLAY_BUFFER_SEC);
+
+  if (roomCode) {
+    updateDoc(doc(db, "rooms", roomCode), { phase: "playing" }).catch((err) =>
+      console.error("revealVideo phase update failed", err)
+    );
+  }
 
   ytPlayer.loadVideoById({ videoId: clip.youtubeId, startSeconds: bufferedStart });
   ytPlayer.playVideo();
@@ -524,6 +629,19 @@ function playClip(clip) {
       finishClip();
     }
   }, 150);
+}
+
+// The active team chose to answer on audio alone, before ever seeing the
+// video — skip straight to the guessing window, doubled scoring applies.
+function skipToGuessing(clip) {
+  stopAudioPhaseTimers();
+  roundAudioOnly = true;
+  currentClip = clip;
+  ytPlayer.pauseVideo();
+  els.hud.hidden = true;
+  showPanel("ended");
+  els.guessTimer.textContent = "60";
+  startGuessWindow();
 }
 
 function finishClip() {
@@ -551,7 +669,7 @@ els.startBtn.addEventListener("click", async () => {
   const idx = queue.pop();
   const clip = clips[idx];
   await startRoundInFirestore(clip); // fast (<1s typically); players need this before guessing
-  playClip(clip);
+  startAudioPhase(clip);
 });
 
 async function performReveal() {
@@ -573,9 +691,10 @@ async function performReveal() {
   if (activeRow) {
     const activeTeam = teamsMap[activeRow.teamId] || {};
     els.roundResultBanner.className = `round-result-banner ${activeRow.points > 0 ? "win" : "lose"}`;
+    const audioBonusNote = roundAudioOnly ? " 🎧 audio-only bonus!" : "";
     els.roundResultBanner.textContent =
       activeRow.points > 0
-        ? `${activeTeam.emoji || ""} ${activeRow.name} scored +${activeRow.points} points!`
+        ? `${activeTeam.emoji || ""} ${activeRow.name} scored +${activeRow.points} points!${audioBonusNote}`
         : `${activeTeam.emoji || ""} ${activeRow.name} scored 0 points this round.`;
     els.roundBreakdown.innerHTML = `
       <span class="${activeRow.movieOk ? "result-correct" : "result-wrong"}">Movie: ${escapeHtml(activeRow.movieGuess || "—")} ${activeRow.movieOk ? "✓" : "✗"}</span><br>
