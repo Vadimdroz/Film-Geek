@@ -59,8 +59,9 @@
 1. ✅ Manual tagging tool + hand-picked clips (localStorage for now, Firestore sync is a later nice-to-have).
 2. ✅ Host display that plays a clip cleanly with the answer hidden.
 3. ✅ Room code + phones joining as teams; team-based 3-field guessing (movie/director/year), 60s timer, live leaderboard.
-4. ✅ Scoring is wired (host tallies each team's earliest per-round submission, +1 per correct field, updates team score on reveal).
-5. PC-TV kiosk polish, then the phone-mirroring fallback. Still untested: a real multi-team playtest with a full 30–50 clip library.
+4. ✅ Scoring is wired (host tallies each team's earliest per-round submission, updates team score on reveal). Scale: 2/5/10 points for 1/2/3 of the 3 fields correct.
+5. ✅ Audio-only round phase: each round plays audio-only for 15s first (video hidden, cover stays up), during which the active team can tap "Answer now" (skip straight to guessing, double points) or "Go to video" (clip restarts from the beginning, visible, normal scoring); auto-continues to video if they don't choose in time.
+6. PC-TV kiosk polish, then the phone-mirroring fallback. Still untested: a real multi-team playtest with a full 30–50 clip library.
 
 ### K. Firestore data model (milestone 3, team-based)
 Firebase project: `film-geek` (separate from other personal projects). Everyone — host and players — signs in anonymously (silent, no login UI) so security rules have a `request.auth.uid` to check against. Scoring is per-**team**, not per-player: players join/create a team (name + emoji avatar) on the join screen, and the first team member to submit each round locks in that team's answer.
