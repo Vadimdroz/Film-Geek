@@ -38,6 +38,29 @@ html, body {
   height: 100% !important;
 }
 
+/* Permanent safety net (see the HTML comment above) — covers the zones
+   where forced branding tends to render: title/channel row at the top,
+   and watermark/captions/"watch on YouTube" row at the bottom. Sits
+   above the iframe but below .cover, so it's irrelevant whenever the
+   cover itself is already hiding everything. */
+#brand-mask-top,
+#brand-mask-bottom {
+  position: fixed;
+  left: 0;
+  right: 0;
+  background: #000;
+  z-index: 3;
+  pointer-events: none;
+}
+#brand-mask-top {
+  top: 0;
+  height: 12%;
+}
+#brand-mask-bottom {
+  bottom: 0;
+  height: 20%;
+}
+
 #hud {
   position: fixed;
   top: 24px;
