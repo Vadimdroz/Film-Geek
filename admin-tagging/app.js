@@ -1,8 +1,27 @@
 // Film-Geek clip tagging tool — vanilla JS, no build step.
-// Clips are stored in this browser's localStorage until Firebase sync is wired up.
+// Clips live in Firestore (clipLibrary/{clipId}) — that's the durable
+// source of truth, not this browser's localStorage, which has already
+// been lost more than once (a stray localStorage.clear() elsewhere on
+// the site, or just unreliable browser storage). localStorage is still
+// written as a passive mirror/offline cache, but Firestore is what
+// survives a wiped browser.
+
+import { db, authReady } from "../shared/firebase.js";
+import {
+  collection,
+  doc,
+  getDocs,
+  setDoc,
+  deleteDoc,
+  onSnapshot,
+} from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 
 const STORAGE_KEY = "filmgeek_clips";
 const TMDB_KEY_STORAGE = "filmgeek_tmdb_key";
+
+function computeClipId(clip) {
+  return `${clip.youtubeId}_${clip.startSec}_${clip.endSec}`;
+}
 
 const els = {
   youtubeUrl: document.getElementById("youtube-url"),
@@ -47,7 +66,8 @@ let previewWatchInterval = null;
 
 let currentVideoId = null;
 let currentEmbeddable = null; // true | false | null (unknown)
-let editIndex = null; // null = adding new clip, otherwise index into clips array being edited
+let editingClipId = null; // null = adding new clip, otherwise the Firestore doc id being edited
+let clips = []; // live-synced from Firestore, each entry carries its own .id
 
 // ---------- YouTube ID parsing ----------
 
@@ -307,24 +327,53 @@ async function fillFromTmdbMovie(movieId, key) {
   els.movieGenre.value = (data.genres || []).map((g) => g.name).join(", ");
 }
 
-// ---------- Clip storage ----------
+// ---------- Clip storage (Firestore, live-synced) ----------
 
-function loadClips() {
+let unsubscribeClips = null;
+
+// One-time safety net: the very first time this loads after switching to
+// Firestore, the cloud library is empty but this browser's localStorage
+// might still hold clips from before. Seed the cloud from that local
+// cache so switching storage backends doesn't itself look like data loss.
+// Only runs when the cloud is empty — never overwrites real cloud data.
+async function migrateLocalStorageClipsIfNeeded() {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
-  } catch {
-    return [];
+    const existingSnap = await getDocs(collection(db, "clipLibrary"));
+    if (!existingSnap.empty) return;
+    const local = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    if (local.length === 0) return;
+    for (const clip of local) {
+      await setDoc(doc(db, "clipLibrary", computeClipId(clip)), clip);
+    }
+  } catch (err) {
+    console.error("One-time localStorage-to-cloud migration failed", err);
   }
 }
 
-function saveClips(clips) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(clips));
+async function initClipSync() {
+  await authReady;
+  await migrateLocalStorageClipsIfNeeded();
+  if (unsubscribeClips) unsubscribeClips();
+  unsubscribeClips = onSnapshot(
+    collection(db, "clipLibrary"),
+    (snap) => {
+      clips = [];
+      snap.forEach((d) => clips.push({ id: d.id, ...d.data() }));
+      clips.sort((a, b) => (a.addedAt || "").localeCompare(b.addedAt || ""));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(clips)); // passive mirror only
+      renderTable();
+    },
+    (err) => {
+      console.error("Clip library sync failed", err);
+      setTmdbStatus(`Cloud sync error: ${err.message} — check your connection.`, "bad");
+    }
+  );
 }
 
 function resetForm() {
   currentVideoId = null;
   currentEmbeddable = null;
-  editIndex = null;
+  editingClipId = null;
   els.youtubeUrl.value = "";
   els.checkResult.textContent = "";
   els.checkResult.className = "check-result";
@@ -349,7 +398,7 @@ function resetForm() {
   if (previewWatchInterval) clearInterval(previewWatchInterval);
 }
 
-els.saveClipBtn.addEventListener("click", () => {
+els.saveClipBtn.addEventListener("click", async () => {
   if (!currentVideoId) {
     alert("Check a YouTube clip first.");
     return;
@@ -371,18 +420,22 @@ els.saveClipBtn.addEventListener("click", () => {
     difficulty: els.movieDifficulty.value,
     notes: els.movieNotes.value.trim(),
     embeddable: currentEmbeddable,
-    addedAt: new Date().toISOString(),
+    addedAt: editingClipId ? clips.find((c) => c.id === editingClipId)?.addedAt || new Date().toISOString() : new Date().toISOString(),
   };
 
-  const clips = loadClips();
-  if (editIndex !== null) {
-    clips[editIndex] = clip;
-  } else {
-    clips.push(clip);
+  const newId = computeClipId(clip);
+  els.saveClipBtn.disabled = true;
+  try {
+    await setDoc(doc(db, "clipLibrary", newId), clip);
+    if (editingClipId && editingClipId !== newId) {
+      await deleteDoc(doc(db, "clipLibrary", editingClipId));
+    }
+    resetForm();
+  } catch (err) {
+    alert(`Couldn't save to the cloud: ${err.message}`);
+  } finally {
+    els.saveClipBtn.disabled = false;
   }
-  saveClips(clips);
-  renderTable();
-  resetForm();
 });
 
 els.cancelEditBtn.addEventListener("click", resetForm);
@@ -390,11 +443,10 @@ els.cancelEditBtn.addEventListener("click", resetForm);
 // ---------- Table rendering ----------
 
 function renderTable() {
-  const clips = loadClips();
   els.clipCount.textContent = `(${clips.length})`;
   els.clipTableBody.innerHTML = "";
 
-  clips.forEach((clip, index) => {
+  clips.forEach((clip) => {
     const tr = document.createElement("tr");
 
     const thumbTd = document.createElement("td");
@@ -433,10 +485,10 @@ function renderTable() {
     actionsTd.className = "actions";
     const editBtn = document.createElement("button");
     editBtn.textContent = "Edit";
-    editBtn.addEventListener("click", () => loadClipIntoForm(index));
+    editBtn.addEventListener("click", () => loadClipIntoForm(clip));
     const deleteBtn = document.createElement("button");
     deleteBtn.textContent = "Delete";
-    deleteBtn.addEventListener("click", () => deleteClip(index));
+    deleteBtn.addEventListener("click", () => deleteClip(clip));
     actionsTd.appendChild(editBtn);
     actionsTd.appendChild(deleteBtn);
     tr.appendChild(actionsTd);
@@ -445,12 +497,8 @@ function renderTable() {
   });
 }
 
-function loadClipIntoForm(index) {
-  const clips = loadClips();
-  const clip = clips[index];
-  if (!clip) return;
-
-  editIndex = index;
+function loadClipIntoForm(clip) {
+  editingClipId = clip.id;
   currentVideoId = clip.youtubeId;
   currentEmbeddable = clip.embeddable;
 
@@ -475,17 +523,18 @@ function loadClipIntoForm(index) {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
-function deleteClip(index) {
-  const clips = loadClips();
-  clips.splice(index, 1);
-  saveClips(clips);
-  renderTable();
+async function deleteClip(clip) {
+  if (!confirm(`Delete "${clip.movieTitle}"? This can't be undone.`)) return;
+  try {
+    await deleteDoc(doc(db, "clipLibrary", clip.id));
+  } catch (err) {
+    alert(`Couldn't delete: ${err.message}`);
+  }
 }
 
 // ---------- Export / Import ----------
 
 els.exportBtn.addEventListener("click", () => {
-  const clips = loadClips();
   const blob = new Blob([JSON.stringify(clips, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -503,20 +552,10 @@ els.importInput.addEventListener("change", async (e) => {
     const imported = JSON.parse(text);
     if (!Array.isArray(imported)) throw new Error("Expected a JSON array of clips.");
 
-    const existing = loadClips();
-    imported.forEach((incoming) => {
-      const dupeIndex = existing.findIndex(
-        (c) => c.youtubeId === incoming.youtubeId && c.startSec === incoming.startSec && c.endSec === incoming.endSec
-      );
-      if (dupeIndex >= 0) {
-        existing[dupeIndex] = incoming;
-      } else {
-        existing.push(incoming);
-      }
-    });
-    saveClips(existing);
-    renderTable();
-    alert(`Imported ${imported.length} clip(s).`);
+    for (const incoming of imported) {
+      await setDoc(doc(db, "clipLibrary", computeClipId(incoming)), incoming);
+    }
+    alert(`Imported ${imported.length} clip(s) to the cloud library.`);
   } catch (err) {
     alert(`Import failed: ${err.message}`);
   } finally {
@@ -526,4 +565,4 @@ els.importInput.addEventListener("change", async (e) => {
 
 // ---------- Init ----------
 
-renderTable();
+initClipSync();
