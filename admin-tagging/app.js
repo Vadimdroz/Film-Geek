@@ -151,11 +151,12 @@ els.checkBtn.addEventListener("click", async () => {
 
 // ---------- YouTube IFrame player ----------
 
-// Called by the YouTube IFrame API script once it has loaded.
-window.onYouTubeIframeAPIReady = function () {
-  ytPlayerReady = true;
-};
-
+// window.onYouTubeIframeAPIReady is the API's own callback hook, but it's
+// only reliable if it's registered before the API finishes loading — and
+// since our code runs as a deferred module script, on a repeat visit with
+// the API script already cached, the API can finish and skip calling it
+// before we've even registered it (same bug, same fix, as the host app).
+// Polling for YT.Player directly instead can't miss that window.
 function openPlayerFor(videoId) {
   els.playerSection.hidden = false;
   els.metadataSection.hidden = false;
@@ -175,15 +176,17 @@ function openPlayerFor(videoId) {
     }
   };
 
-  if (ytPlayerReady) {
+  if (window.YT && window.YT.Player) {
+    ytPlayerReady = true;
     start();
   } else {
     const waitForApi = setInterval(() => {
-      if (ytPlayerReady) {
+      if (window.YT && window.YT.Player) {
+        ytPlayerReady = true;
         clearInterval(waitForApi);
         start();
       }
-    }, 200);
+    }, 100);
   }
 }
 
