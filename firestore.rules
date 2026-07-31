@@ -4,10 +4,16 @@ rules_version = '2';
 //
 // Everyone (host + players) signs in anonymously, so request.auth.uid is
 // always available. The room doc only ever holds public-safe fields
-// (phase, round number, multiple-choice options) — the actual answer for
-// the current clip lives in rooms/{code}/private/answer, which only the
-// room's host (hostUid) can read. This is what stops a player from
-// opening devtools and reading the answer out of Firestore before reveal.
+// (phase, round number, deadline) — the actual answer for the current
+// clip lives in rooms/{code}/private/answer, which only the room's host
+// (hostUid) can read. This is what stops a player from opening devtools
+// and reading the answer out of Firestore before reveal.
+//
+// Scoring is team-based: rooms/{code}/teams/{teamId} holds each team's
+// name/emoji/score. Any signed-in player can create or join a team and
+// the host updates scores at reveal — this is a private living-room game
+// among friends, not something defended against cheating, so team writes
+// are intentionally left open rather than locked to exact-field diffs.
 service cloud.firestore {
   match /databases/{database}/documents {
     function isSignedIn() {
@@ -28,9 +34,14 @@ service cloud.firestore {
         allow read, write: if isHost(roomCode);
       }
 
-      match /players/{uid} {
+      match /public/{docId} {
         allow read: if isSignedIn();
-        allow create, update: if isSignedIn() && request.auth.uid == uid;
+        allow write: if isHost(roomCode);
+      }
+
+      match /teams/{teamId} {
+        allow read: if isSignedIn();
+        allow create, update: if isSignedIn();
       }
 
       match /rounds/{roundIndex}/guesses/{uid} {
