@@ -79,6 +79,8 @@ let currentPhase = null;
 let lastSeenRoundIndex = -1;
 let myTeamGuessThisRound = null;
 let movieIndex = { titles: [], directors: [] };
+let teamsCache = {}; // teamId -> team data, for looking up whose turn it is
+let currentActiveTeamId = null;
 
 let unsubRoom = null;
 let unsubGuesses = null;
@@ -332,7 +334,12 @@ function attachTeamsListener() {
   if (unsubTeams) unsubTeams();
   unsubTeams = onSnapshot(collection(db, "rooms", roomCode, "teams"), (snap) => {
     const teams = [];
-    snap.forEach((d) => teams.push({ id: d.id, ...d.data() }));
+    teamsCache = {};
+    snap.forEach((d) => {
+      const t = { id: d.id, ...d.data() };
+      teams.push(t);
+      teamsCache[d.id] = t;
+    });
     teams.sort((a, b) => (b.score || 0) - (a.score || 0));
 
     els.leaderboard.hidden = teams.length === 0;
@@ -367,8 +374,18 @@ function attachRoundGuessListener(roundIndex) {
   });
 }
 
+function isMyTurn() {
+  return currentActiveTeamId && currentActiveTeamId === teamId;
+}
+
+function activeTeamLabel() {
+  const t = currentActiveTeamId && teamsCache[currentActiveTeamId];
+  return t ? `${t.emoji} ${t.name}` : "another team";
+}
+
 function handleRoomUpdate(data) {
   currentPhase = data.phase;
+  currentActiveTeamId = data.activeTeamId || null;
 
   if (data.roundIndex !== lastSeenRoundIndex) {
     lastSeenRoundIndex = data.roundIndex;
@@ -377,12 +394,24 @@ function handleRoomUpdate(data) {
 
   if (data.phase === "playing") {
     stopCountdown();
-    els.waitingTitle.textContent = "🎬 Watch the TV!";
-    els.waitingMessage.textContent = "The clip is playing — get ready to answer once it ends.";
+    if (isMyTurn()) {
+      els.waitingTitle.textContent = "🎬 Your turn!";
+      els.waitingMessage.textContent = "Watch the TV — get ready to answer once the clip ends.";
+    } else {
+      els.waitingTitle.textContent = "🎬 Watch the TV!";
+      els.waitingMessage.textContent = `It's ${activeTeamLabel()}'s turn to answer — you're just watching this round.`;
+    }
     showScreen("waiting");
   } else if (data.phase === "guessing") {
-    startCountdown(data.guessDeadline);
-    renderGuessingOrLocked();
+    if (isMyTurn()) {
+      startCountdown(data.guessDeadline);
+      renderGuessingOrLocked();
+    } else {
+      stopCountdown();
+      els.waitingTitle.textContent = "⏳ Not your turn";
+      els.waitingMessage.textContent = `${activeTeamLabel()} is answering this round. Hang tight for the reveal!`;
+      showScreen("waiting");
+    }
   } else if (data.phase === "revealed") {
     stopCountdown();
     renderRevealed(data.revealedAnswer);
@@ -480,8 +509,10 @@ function renderRevealed(answer) {
       <div class="${directorOk ? "result-correct" : "result-wrong"}">Director: ${escapeHtml(guess.directorGuess || "—")} ${directorOk ? "✓" : "✗"}</div>
       <div class="${yearOk ? "result-correct" : "result-wrong"}">Year: ${escapeHtml(String(guess.yearGuess || "—"))} ${yearOk ? "✓" : "✗"}</div>
     `;
+  } else if (isMyTurn()) {
+    els.revealedBreakdown.innerHTML = '<div class="hint">Your team didn\'t answer in time.</div>';
   } else {
-    els.revealedBreakdown.innerHTML = '<div class="hint">Your team didn\'t answer this round.</div>';
+    els.revealedBreakdown.innerHTML = '<div class="hint">Not your team\'s turn this round.</div>';
   }
 }
 
