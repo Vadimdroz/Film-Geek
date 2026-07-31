@@ -30,6 +30,7 @@ const els = {
   cover: document.getElementById("cover"),
   roomCodeDisplay: document.getElementById("room-code-display"),
   playerCount: document.getElementById("player-count"),
+  roundIndicator: document.getElementById("round-indicator"),
 
   idlePanel: document.getElementById("idle-panel"),
   queueStatus: document.getElementById("queue-status"),
@@ -153,6 +154,7 @@ async function startRoundInFirestore(clip) {
   try {
     currentRoundIndex += 1;
     roundRevealed = false;
+    updateRoundIndicator();
     await setDoc(
       doc(db, "rooms", roomCode),
       { phase: "playing", roundIndex: currentRoundIndex, revealedAnswer: null, guessDeadline: null },
@@ -267,6 +269,7 @@ async function revealInFirestore(clip) {
         directorOk,
         yearOk,
         points,
+        newTotal: (team.score || 0) + points,
       });
 
       if (points > 0) {
@@ -348,8 +351,14 @@ function showPanel(name) {
   els.cover.hidden = false;
 }
 
+function updateRoundIndicator() {
+  const roundNumber = Math.min(currentRoundIndex + 1, clips.length);
+  els.roundIndicator.textContent = clips.length ? `Round ${roundNumber} of ${clips.length}` : "";
+}
+
 function showIdle() {
-  els.queueStatus.textContent = `${queue.length} of ${clips.length} clips left in this round`;
+  updateRoundIndicator();
+  els.queueStatus.textContent = queue.length > 0 ? "Ready when you are" : "Last round!";
   showPanel("idle");
 }
 
@@ -385,6 +394,7 @@ function createYtPlayerWhenApiReady() {
       disablekb: 1,
       fs: 0,
       playsinline: 1,
+      cc_load_policy: 0, // don't auto-show YouTube's own captions (won't remove captions burned into the video itself, if any)
     },
     events: {
       onReady: () => {
@@ -504,7 +514,7 @@ async function performReveal() {
     ? rows
         .map(
           (r) => `<div>
-            ${r.emoji} <strong>${escapeHtml(r.name)}</strong> — ${r.points} pt${r.points === 1 ? "" : "s"}<br>
+            ${r.emoji} <strong>${escapeHtml(r.name)}</strong> — +${r.points} this round (${r.newTotal} total)<br>
             <span class="${r.movieOk ? "result-correct" : "result-wrong"}">Movie: ${escapeHtml(r.movieGuess || "—")} ${r.movieOk ? "✓" : "✗"}</span> ·
             <span class="${r.directorOk ? "result-correct" : "result-wrong"}">Director: ${escapeHtml(r.directorGuess || "—")} ${r.directorOk ? "✓" : "✗"}</span> ·
             <span class="${r.yearOk ? "result-correct" : "result-wrong"}">Year: ${escapeHtml(String(r.yearGuess || "—"))} ${r.yearOk ? "✓" : "✗"}</span>
