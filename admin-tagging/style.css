@@ -151,6 +151,27 @@ button.primary { background: var(--accent); color: var(--accent-fg); border-colo
 
 .clip-count { font-size: 0.85rem; color: var(--muted); font-weight: normal; text-transform: none; }
 
+.trivia-list { margin-bottom: 0.75rem; }
+.trivia-list:empty::before {
+  content: "No trivia questions added yet.";
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.trivia-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 0.4rem;
+  font-size: 0.85rem;
+}
+.trivia-item .trivia-item-text { flex: 1 1 auto; }
+.trivia-item .trivia-item-answer { color: var(--ok); font-weight: 600; }
+.trivia-options-row label { min-width: 140px; }
+
 .import-label {
   display: inline-flex;
   align-items: center;

@@ -14,6 +14,7 @@ import {
   getDocs,
   setDoc,
   updateDoc,
+  deleteDoc,
   onSnapshot,
   collection,
   serverTimestamp,
@@ -21,25 +22,41 @@ import {
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 
 const STORAGE_KEY = "filmgeek_clips";
+const ACTIVE_ROOM_KEY = "filmgeek_active_room"; // which room (if any) this browser can resume
 const ROOM_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no I/O/0/1, easy to read aloud
 const GUESS_WINDOW_MS = 60000;
 const AUDIO_ONLY_WINDOW_MS = 15000;
 
 const els = {
   playerWrap: document.getElementById("player-wrap"),
+  fullscreenBtn: document.getElementById("fullscreen-btn"),
   hud: document.getElementById("hud"),
   timer: document.getElementById("timer"),
   stopEarlyBtn: document.getElementById("stop-early-btn"),
 
   cover: document.getElementById("cover"),
+  roomInfo: document.getElementById("room-info"),
   roomCodeDisplay: document.getElementById("room-code-display"),
+  gameNameDisplay: document.getElementById("game-name-display"),
   playerCount: document.getElementById("player-count"),
   roundIndicator: document.getElementById("round-indicator"),
   turnIndicator: document.getElementById("turn-indicator"),
 
+  setupPanel: document.getElementById("setup-panel"),
+  resumeBlock: document.getElementById("resume-block"),
+  resumeGameName: document.getElementById("resume-game-name"),
+  resumeGameDetail: document.getElementById("resume-game-detail"),
+  resumeBtn: document.getElementById("resume-btn"),
+  startFreshBtn: document.getElementById("start-fresh-btn"),
+  newGameBlock: document.getElementById("new-game-block"),
+  gameNameInput: document.getElementById("game-name-input"),
+  newGameBtn: document.getElementById("new-game-btn"),
+
   idlePanel: document.getElementById("idle-panel"),
   queueStatus: document.getElementById("queue-status"),
   startBtn: document.getElementById("start-btn"),
+  finishGameBtn: document.getElementById("finish-game-btn"),
+  finishGameBtnAllDone: document.getElementById("finish-game-btn-alldone"),
 
   noClipsPanel: document.getElementById("no-clips-panel"),
   importInput: document.getElementById("import-input"),
@@ -61,6 +78,18 @@ const els = {
   scoreboardList: document.getElementById("scoreboard-list"),
   nextBtn: document.getElementById("next-btn"),
 
+  triviaPanel: document.getElementById("trivia-panel"),
+  triviaQuestion: document.getElementById("trivia-question"),
+  triviaOptions: document.getElementById("trivia-options"),
+  triviaTimer: document.getElementById("trivia-timer"),
+  triviaCount: document.getElementById("trivia-count"),
+
+  triviaResultPanel: document.getElementById("trivia-result-panel"),
+  triviaResultBanner: document.getElementById("trivia-result-banner"),
+  triviaResultOptions: document.getElementById("trivia-result-options"),
+  triviaScoreboardList: document.getElementById("trivia-scoreboard-list"),
+  triviaContinueBtn: document.getElementById("trivia-continue-btn"),
+
   allDonePanel: document.getElementById("all-done-panel"),
   reshuffleBtn: document.getElementById("reshuffle-btn"),
 
@@ -70,7 +99,9 @@ const els = {
 };
 
 let clips = [];
-let queue = []; // indices into `clips` not yet shown this round
+let clipsById = {}; // clip id -> clip, rebuilt whenever `clips` loads
+let queue = []; // clip ids not yet shown this game
+let usedClipIds = []; // clip ids already shown this game (any team) — never re-served
 let currentClip = null;
 
 let ytPlayer = null;
@@ -112,6 +143,26 @@ let audioTimeout = null;
 const POINTS_BY_CORRECT_COUNT = { 0: 0, 1: 2, 2: 5, 3: 10 };
 const AUDIO_ONLY_MULTIPLIER = 2;
 
+// Bonus trivia: after some reveals, instead of going straight to the next
+// clip, a Kahoot-style multiple-choice question about the movie just
+// revealed pops up — open to every team (not just the one whose turn it
+// was), first correct answer wins. Only fires for clips that actually have
+// trivia authored in admin-tagging, and even then only some of the time so
+// it stays a surprise rather than a fixed extra step every round.
+const TRIVIA_CHANCE = 0.5;
+const TRIVIA_WINDOW_MS = 12000;
+const TRIVIA_POINTS = 5;
+const TRIVIA_SHAPES = ["🔺", "♦️", "⬤", "◼️"];
+const TRIVIA_COLORS = ["trivia-red", "trivia-blue", "trivia-yellow", "trivia-green"];
+
+let unsubscribeTrivia = null;
+let triviaCountdownInterval = null;
+let triviaAutoRevealTimeout = null;
+let triviaAnswers = {}; // uid -> { teamId, selectedIndex, submittedAt }
+let triviaCorrectIndex = null;
+let triviaOptions = [];
+let triviaRevealed = false;
+
 // Stable turn order: whoever's team doc was created earliest goes first.
 // Rotates through teams currently in the room — if a team joins mid-game
 // it's added to the rotation from its creation order, same as anyone else.
@@ -127,7 +178,9 @@ function generateRoomCode() {
   return code;
 }
 
-async function ensureRoom() {
+// Creates a brand-new room doc for a fresh game. Resuming an existing game
+// (see resumeGame below) skips this entirely and reuses the saved room code.
+async function createRoom(gameName) {
   try {
     const user = await authReady;
     const hostUid = user.uid;
@@ -138,6 +191,7 @@ async function ensureRoom() {
       if (!snap.exists()) {
         await setDoc(ref, {
           hostUid,
+          gameName: gameName || "",
           phase: "lobby",
           roundIndex: 0,
           revealedAnswer: null,
@@ -148,40 +202,158 @@ async function ensureRoom() {
         break;
       }
     }
-    if (!roomCode) return;
+    if (!roomCode) return false;
+    localStorage.setItem(ACTIVE_ROOM_KEY, roomCode);
+    els.roomInfo.hidden = false;
     els.roomCodeDisplay.textContent = roomCode;
-
-    await publishMovieIndex();
-
-    onSnapshot(collection(db, "rooms", roomCode, "teams"), (snap) => {
-      teamsMap = {};
-      snap.forEach((d) => (teamsMap[d.id] = d.data()));
-      const teamCount = Object.keys(teamsMap).length;
-      const playerCount = Object.values(teamsMap).reduce((sum, t) => sum + (t.memberNames?.length || 0), 0);
-      els.playerCount.textContent =
-        teamCount === 0
-          ? "0 teams joined"
-          : `${teamCount} team${teamCount === 1 ? "" : "s"}, ${playerCount} player${playerCount === 1 ? "" : "s"} joined`;
-
-      // The active team can't write the room doc directly (only the host
-      // can), so they signal their audio-phase choice on their own team
-      // doc instead — which they're already allowed to write — and the
-      // host reacts to it here.
-      if (!audioChoiceHandled && activeTeamId && currentClip) {
-        const team = teamsMap[activeTeamId];
-        if (team && team.audioChoiceRound === currentRoundIndex && team.audioChoice) {
-          audioChoiceHandled = true;
-          if (team.audioChoice === "answer_now") {
-            skipToGuessing(currentClip);
-          } else if (team.audioChoice === "go_to_video") {
-            revealVideo(currentClip);
-          }
-        }
-      }
-    });
+    els.gameNameDisplay.textContent = gameName || "";
+    return true;
   } catch (err) {
     els.playerCount.textContent = "Room sync unavailable — playing local-only.";
-    console.error("ensureRoom failed", err);
+    console.error("createRoom failed", err);
+    return false;
+  }
+}
+
+// Shared by both a freshly-created room and a resumed one — subscribes to
+// the teams subcollection for the roster/score display and for picking up
+// the active team's audio-phase choice (see the comment inside).
+function subscribeToRoomTeams() {
+  onSnapshot(collection(db, "rooms", roomCode, "teams"), (snap) => {
+    teamsMap = {};
+    snap.forEach((d) => (teamsMap[d.id] = d.data()));
+    const teamCount = Object.keys(teamsMap).length;
+    const playerCount = Object.values(teamsMap).reduce((sum, t) => sum + (t.memberNames?.length || 0), 0);
+    els.playerCount.textContent =
+      teamCount === 0
+        ? "0 teams joined"
+        : `${teamCount} team${teamCount === 1 ? "" : "s"}, ${playerCount} player${playerCount === 1 ? "" : "s"} joined`;
+
+    // The active team can't write the room doc directly (only the host
+    // can), so they signal their audio-phase choice on their own team
+    // doc instead — which they're already allowed to write — and the
+    // host reacts to it here.
+    if (!audioChoiceHandled && activeTeamId && currentClip) {
+      const team = teamsMap[activeTeamId];
+      if (team && team.audioChoiceRound === currentRoundIndex && team.audioChoice) {
+        audioChoiceHandled = true;
+        if (team.audioChoice === "answer_now") {
+          skipToGuessing(currentClip);
+        } else if (team.audioChoice === "go_to_video") {
+          revealVideo(currentClip);
+        }
+      }
+    }
+  });
+}
+
+// Persists enough of the in-progress game (which clips are left/used, the
+// round number) to Firestore that reopening the host page can pick back up
+// where it left off — teams/scores already live in Firestore separately,
+// so this doc only needs to cover the queue/round bookkeeping.
+async function saveGameState() {
+  if (!roomCode) return;
+  try {
+    await setDoc(doc(db, "rooms", roomCode, "private", "gameState"), {
+      queueIds: queue,
+      usedClipIds,
+      roundIndex: currentRoundIndex,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    console.error("saveGameState failed", err);
+  }
+}
+
+// Checks whether the room this browser last played is still resumable
+// (exists, still owned by this browser's anon-auth identity, has saved
+// progress) — returns null rather than throwing so callers can just fall
+// back to the new-game setup screen.
+async function tryLoadResumableGame(code) {
+  try {
+    const user = await authReady;
+    const roomSnap = await getDoc(doc(db, "rooms", code));
+    if (!roomSnap.exists() || roomSnap.data().hostUid !== user.uid) return null;
+    const gameStateSnap = await getDoc(doc(db, "rooms", code, "private", "gameState"));
+    if (!gameStateSnap.exists()) return null;
+    return { code, room: roomSnap.data(), gameState: gameStateSnap.data() };
+  } catch (err) {
+    console.error("tryLoadResumableGame failed", err);
+    return null;
+  }
+}
+
+async function resumeGame(resumable) {
+  roomCode = resumable.code;
+  currentRoundIndex = resumable.gameState.roundIndex || 0;
+  usedClipIds = resumable.gameState.usedClipIds || [];
+  // Drop any ids for clips that no longer exist in the library (deleted
+  // since this game started) rather than let them jam up the queue.
+  queue = (resumable.gameState.queueIds || []).filter((id) => clipsById[id]);
+
+  localStorage.setItem(ACTIVE_ROOM_KEY, roomCode);
+  els.roomInfo.hidden = false;
+  els.roomCodeDisplay.textContent = roomCode;
+  els.gameNameDisplay.textContent = resumable.room.gameName || "";
+
+  await publishMovieIndex();
+  subscribeToRoomTeams();
+  showIdle();
+}
+
+async function startNewGame(gameName) {
+  usedClipIds = [];
+  const created = await createRoom(gameName);
+  if (!created) return;
+  initQueue();
+  await saveGameState();
+  await publishMovieIndex();
+  subscribeToRoomTeams();
+  showIdle();
+}
+
+// "Finish game" is the explicit, deliberate end of a game night — unlike
+// just closing the tab, it deletes the room's Firestore data so old games
+// don't pile up, and clears the local pointer so a reload lands on the
+// new-game setup screen instead of trying to resume the deleted room.
+async function finishGame() {
+  if (!roomCode) return;
+  if (!confirm("Finish this game and clear its history? This can't be undone.")) return;
+
+  const codeToDelete = roomCode;
+  const roundsToDelete = currentRoundIndex;
+
+  localStorage.removeItem(ACTIVE_ROOM_KEY);
+  roomCode = null;
+  teamsMap = {};
+  currentRoundIndex = 0;
+  usedClipIds = [];
+  queue = [];
+  els.roomInfo.hidden = true;
+  showNewGameSetup();
+
+  await deleteRoomData(codeToDelete, roundsToDelete);
+}
+
+async function deleteRoomData(code, roundCount) {
+  try {
+    const teamsSnap = await getDocs(collection(db, "rooms", code, "teams"));
+    await Promise.all(teamsSnap.docs.map((d) => deleteDoc(d.ref)));
+
+    for (let i = 1; i <= roundCount; i++) {
+      const guessesSnap = await getDocs(collection(db, "rooms", code, "rounds", String(i), "guesses"));
+      await Promise.all(guessesSnap.docs.map((d) => deleteDoc(d.ref)));
+      const triviaSnap = await getDocs(collection(db, "rooms", code, "rounds", String(i), "trivia"));
+      await Promise.all(triviaSnap.docs.map((d) => deleteDoc(d.ref)));
+    }
+
+    await deleteDoc(doc(db, "rooms", code, "private", "answer")).catch(() => {});
+    await deleteDoc(doc(db, "rooms", code, "private", "triviaAnswer")).catch(() => {});
+    await deleteDoc(doc(db, "rooms", code, "private", "gameState")).catch(() => {});
+    await deleteDoc(doc(db, "rooms", code, "public", "movieIndex")).catch(() => {});
+    await deleteDoc(doc(db, "rooms", code));
+  } catch (err) {
+    console.error("deleteRoomData failed", err);
   }
 }
 
@@ -368,6 +540,146 @@ async function returnToLobby() {
   await updateDoc(doc(db, "rooms", roomCode), { phase: "lobby", guessDeadline: null }).catch(() => {});
 }
 
+// ---------- Bonus trivia ----------
+
+function pickTriviaForClip(clip) {
+  if (!clip || !clip.trivia || clip.trivia.length === 0) return null;
+  return clip.trivia[Math.floor(Math.random() * clip.trivia.length)];
+}
+
+function renderTriviaOptions(targetEl, options, { dimWrong = false, correctIndex = null } = {}) {
+  targetEl.innerHTML = options
+    .map((opt, i) => {
+      const classes = ["trivia-option", TRIVIA_COLORS[i]];
+      if (dimWrong && i !== correctIndex) classes.push("trivia-dim");
+      if (dimWrong && i === correctIndex) classes.push("trivia-correct");
+      return `<div class="${classes.join(" ")}"><span class="trivia-shape">${TRIVIA_SHAPES[i]}</span>${escapeHtml(opt)}</div>`;
+    })
+    .join("");
+}
+
+function attachTriviaListener(roundIndex) {
+  if (unsubscribeTrivia) unsubscribeTrivia();
+  triviaAnswers = {};
+  els.triviaCount.textContent = "";
+  if (!roomCode) return;
+  const ref = collection(db, "rooms", roomCode, "rounds", String(roundIndex), "trivia");
+  unsubscribeTrivia = onSnapshot(ref, (snap) => {
+    triviaAnswers = {};
+    snap.forEach((d) => (triviaAnswers[d.id] = d.data()));
+    const count = Object.keys(triviaAnswers).length;
+    els.triviaCount.textContent = count === 0 ? "" : count === 1 ? "1 answer in" : `${count} answers in`;
+  });
+}
+
+function stopTriviaTimers() {
+  if (triviaCountdownInterval) {
+    clearInterval(triviaCountdownInterval);
+    triviaCountdownInterval = null;
+  }
+  if (triviaAutoRevealTimeout) {
+    clearTimeout(triviaAutoRevealTimeout);
+    triviaAutoRevealTimeout = null;
+  }
+  if (unsubscribeTrivia) {
+    unsubscribeTrivia();
+    unsubscribeTrivia = null;
+  }
+}
+
+async function startTriviaRound(trivia) {
+  triviaRevealed = false;
+  triviaCorrectIndex = trivia.correctIndex;
+  triviaOptions = trivia.options;
+  els.triviaQuestion.textContent = trivia.question;
+  renderTriviaOptions(els.triviaOptions, trivia.options);
+  showPanel("trivia");
+
+  if (roomCode) {
+    await setDoc(doc(db, "rooms", roomCode, "private", "triviaAnswer"), { correctIndex: trivia.correctIndex }).catch(
+      (err) => console.error("startTriviaRound (private) failed", err)
+    );
+    await updateDoc(doc(db, "rooms", roomCode), {
+      phase: "trivia",
+      triviaQuestion: { question: trivia.question, options: trivia.options },
+      triviaDeadline: Date.now() + TRIVIA_WINDOW_MS,
+      triviaResult: null,
+    }).catch((err) => console.error("startTriviaRound failed", err));
+  }
+
+  attachTriviaListener(currentRoundIndex);
+
+  const deadline = Date.now() + TRIVIA_WINDOW_MS;
+  els.triviaTimer.textContent = Math.round(TRIVIA_WINDOW_MS / 1000);
+  if (triviaCountdownInterval) clearInterval(triviaCountdownInterval);
+  triviaCountdownInterval = setInterval(() => {
+    const remaining = Math.max(0, Math.round((deadline - Date.now()) / 1000));
+    els.triviaTimer.textContent = remaining;
+    if (remaining <= 0) {
+      clearInterval(triviaCountdownInterval);
+      triviaCountdownInterval = null;
+    }
+  }, 250);
+
+  if (triviaAutoRevealTimeout) clearTimeout(triviaAutoRevealTimeout);
+  triviaAutoRevealTimeout = setTimeout(() => {
+    if (!triviaRevealed) performTriviaReveal();
+  }, TRIVIA_WINDOW_MS);
+}
+
+// Same "collaborate then whoever submits first locks it in" model as the
+// main guess — earliest submission per team counts, and among teams that
+// answered correctly, the earliest one wins the points.
+async function performTriviaReveal() {
+  if (triviaRevealed) return;
+  triviaRevealed = true;
+  stopTriviaTimers();
+
+  const byTeam = {};
+  for (const ans of Object.values(triviaAnswers)) {
+    if (!ans.teamId) continue;
+    const existing = byTeam[ans.teamId];
+    const t = ans.submittedAt?.toMillis?.() ?? 0;
+    if (!existing || t < existing._t) byTeam[ans.teamId] = { ...ans, _t: t };
+  }
+  const correctSubs = Object.entries(byTeam)
+    .filter(([, a]) => a.selectedIndex === triviaCorrectIndex)
+    .sort((a, b) => a[1]._t - b[1]._t);
+
+  let winner = null;
+  if (correctSubs.length && roomCode) {
+    const [winnerTeamId] = correctSubs[0];
+    const team = teamsMap[winnerTeamId] || {};
+    winner = { teamId: winnerTeamId, name: team.name, emoji: team.emoji, newTotal: (team.score || 0) + TRIVIA_POINTS };
+    await updateDoc(doc(db, "rooms", roomCode, "teams", winnerTeamId), { score: increment(TRIVIA_POINTS) }).catch(
+      () => {}
+    );
+  }
+
+  if (roomCode) {
+    await updateDoc(doc(db, "rooms", roomCode), {
+      phase: "trivia-revealed",
+      triviaResult: {
+        correctIndex: triviaCorrectIndex,
+        winnerTeamId: winner ? winner.teamId : null,
+        winnerName: winner ? winner.name : null,
+        winnerEmoji: winner ? winner.emoji : null,
+      },
+    }).catch((err) => console.error("performTriviaReveal failed", err));
+  }
+
+  renderTriviaOptions(els.triviaResultOptions, triviaOptions, { dimWrong: true, correctIndex: triviaCorrectIndex });
+  if (winner) {
+    els.triviaResultBanner.className = "round-result-banner win";
+    els.triviaResultBanner.textContent = `${winner.emoji || ""} ${winner.name} got it first! +${TRIVIA_POINTS} points`;
+  } else {
+    els.triviaResultBanner.className = "round-result-banner lose";
+    els.triviaResultBanner.textContent = "Nobody got it right this time.";
+  }
+  renderScoreboard(winner, els.triviaScoreboardList);
+  showPanel("trivia-result");
+}
+
 // ---------- Clip library ----------
 // Firestore (clipLibrary/{id}) is the durable source of truth, written by
 // the admin-tagging tool. localStorage is kept only as an offline/fallback
@@ -404,11 +716,16 @@ function shuffle(arr) {
   return a;
 }
 
+// Only clips not already used this game go back into a fresh shuffle —
+// usedClipIds is empty for a brand-new game, so this is a full shuffle
+// there, but also works for the "reshuffle & play again" case where the
+// whole library becomes eligible again only after usedClipIds is cleared.
 function initQueue() {
-  queue = shuffle(clips.map((_, i) => i));
+  const remaining = clips.map((c) => c.id).filter((id) => !usedClipIds.includes(id));
+  queue = shuffle(remaining);
 }
 
-async function refreshLibrary() {
+async function loadLibrary() {
   try {
     const cloudClips = await fetchClipsFromCloud();
     clips = cloudClips.length > 0 ? cloudClips : loadClipsFromLocalStorage();
@@ -417,14 +734,7 @@ async function refreshLibrary() {
     console.error("Cloud clip fetch failed, falling back to local cache", err);
     clips = loadClipsFromLocalStorage();
   }
-
-  if (clips.length === 0) {
-    showPanel("no-clips");
-    return;
-  }
-  initQueue();
-  await publishMovieIndex();
-  showIdle();
+  clipsById = Object.fromEntries(clips.map((c) => [c.id, c]));
 }
 
 // ---------- Panel switching ----------
@@ -432,14 +742,34 @@ async function refreshLibrary() {
 // itself is hidden only while a clip is actively playing.
 
 function showPanel(name) {
+  els.setupPanel.hidden = name !== "setup";
   els.idlePanel.hidden = name !== "idle";
   els.noClipsPanel.hidden = name !== "no-clips";
   els.audioPanel.hidden = name !== "audio";
   els.endedPanel.hidden = name !== "ended";
   els.answerPanel.hidden = name !== "answer";
+  els.triviaPanel.hidden = name !== "trivia";
+  els.triviaResultPanel.hidden = name !== "trivia-result";
   els.allDonePanel.hidden = name !== "all-done";
   els.errorPanel.hidden = name !== "error";
   els.cover.hidden = false;
+}
+
+function showNewGameSetup() {
+  els.resumeBlock.hidden = true;
+  els.newGameBlock.hidden = false;
+  els.gameNameInput.value = "";
+  showPanel("setup");
+  els.gameNameInput.focus();
+}
+
+function showResumeChoice(resumable) {
+  els.resumeBlock.hidden = false;
+  els.newGameBlock.hidden = true;
+  els.resumeGameName.textContent = resumable.room.gameName || "Untitled game";
+  const clipsShown = resumable.gameState.usedClipIds?.length || 0;
+  els.resumeGameDetail.textContent = `Round ${resumable.gameState.roundIndex || 0} · ${clipsShown} clip${clipsShown === 1 ? "" : "s"} shown so far`;
+  showPanel("setup");
 }
 
 function updateTurnIndicator() {
@@ -533,20 +863,13 @@ els.errorSkipBtn.addEventListener("click", async () => {
   }
 });
 
-// YouTube shows a brief title/info overlay for the first couple seconds
-// whenever a video starts playing — this happens even with controls
-// disabled, it's a separate "just started" overlay, not the normal
-// control bar. Starting slightly before the tagged startSec (hidden
-// behind our cover) and revealing only after this buffer means viewers
-// never see it, and the visible window still matches exactly what was
-// tagged. If startSec is smaller than the buffer, we lose a bit of the
-// front of the clip instead — a fine trade next to leaking the title.
-const TITLE_OVERLAY_BUFFER_SEC = 2.5;
-
 // Audio-only phase: the clip plays (audio audible to the whole room) but
-// the cover stays up the entire time — video is never shown here, so the
-// TITLE_OVERLAY_BUFFER_SEC trick isn't needed yet (nothing's visible
-// regardless). The active team's phone offers "Answer now" (double
+// the cover stays up the entire time — video is never shown here. The
+// same play-through covers YouTube's brief start-of-video title/info
+// overlay, so by the time video is revealed (always at least
+// AUDIO_ONLY_WINDOW_MS in) that overlay has long since disappeared and
+// there's no need for a separate reveal buffer. The active team's phone
+// offers "Answer now" (double
 // points, skips straight to guessing) or "Go to video" (normal points);
 // this auto-continues to video if neither is chosen in time.
 function startAudioPhase(clip) {
@@ -598,13 +921,14 @@ function stopAudioPhaseTimers() {
   }
 }
 
-// The active team chose (or timed out into) seeing the video — clip
-// restarts from the very beginning, this time visible, normal scoring.
+// The active team chose (or timed out into) seeing the video — it's
+// already been playing (audio-only, hidden behind the cover) since
+// startAudioPhase, so this just reveals what's already running in place
+// rather than reloading/restarting it from the top.
 function revealVideo(clip) {
   stopAudioPhaseTimers();
   roundAudioOnly = false;
   currentClip = clip;
-  const bufferedStart = Math.max(0, clip.startSec - TITLE_OVERLAY_BUFFER_SEC);
 
   if (roomCode) {
     updateDoc(doc(db, "rooms", roomCode), { phase: "playing" }).catch((err) =>
@@ -612,13 +936,8 @@ function revealVideo(clip) {
     );
   }
 
-  ytPlayer.loadVideoById({ videoId: clip.youtubeId, startSeconds: bufferedStart });
-  ytPlayer.playVideo();
-
-  setTimeout(() => {
-    els.cover.hidden = true;
-    els.hud.hidden = false;
-  }, TITLE_OVERLAY_BUFFER_SEC * 1000);
+  els.cover.hidden = true;
+  els.hud.hidden = false;
 
   if (endWatcher) clearInterval(endWatcher);
   endWatcher = setInterval(() => {
@@ -658,6 +977,62 @@ function finishClip() {
 
 els.stopEarlyBtn.addEventListener("click", finishClip);
 
+// ---------- Fullscreen ----------
+// The Fullscreen API only works from inside a user-gesture handler, so
+// there's no way to make the page fullscreen the instant it loads — the
+// dedicated button covers the "enter fullscreen right away" case, and
+// starting the first round (also a click) tries it too so hosts who skip
+// the button still end up fullscreen for the actual game.
+
+function updateFullscreenBtnLabel() {
+  els.fullscreenBtn.textContent = document.fullscreenElement ? "⛶ Exit fullscreen" : "⛶ Fullscreen";
+}
+
+function requestFullscreen() {
+  if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+    document.documentElement.requestFullscreen().catch(() => {}); // ignore if blocked/unsupported
+  }
+}
+
+els.fullscreenBtn.addEventListener("click", () => {
+  if (document.fullscreenElement) {
+    document.exitFullscreen();
+  } else {
+    requestFullscreen();
+  }
+});
+document.addEventListener("fullscreenchange", updateFullscreenBtnLabel);
+
+// ---------- Game setup / resume ----------
+
+els.resumeBtn.addEventListener("click", async () => {
+  const savedRoom = localStorage.getItem(ACTIVE_ROOM_KEY);
+  els.resumeBtn.disabled = true;
+  const resumable = savedRoom && (await tryLoadResumableGame(savedRoom));
+  if (resumable) {
+    await resumeGame(resumable);
+  } else {
+    showNewGameSetup();
+  }
+  els.resumeBtn.disabled = false;
+});
+
+els.startFreshBtn.addEventListener("click", () => showNewGameSetup());
+
+els.newGameBtn.addEventListener("click", async () => {
+  els.newGameBtn.disabled = true;
+  els.newGameBtn.textContent = "Starting…";
+  try {
+    await startNewGame(els.gameNameInput.value.trim());
+  } finally {
+    els.newGameBtn.disabled = false;
+    els.newGameBtn.textContent = "Start new game";
+  }
+});
+
+els.finishGameBtn.addEventListener("click", finishGame);
+els.finishGameBtnAllDone.addEventListener("click", finishGame);
+
 // ---------- Round flow ----------
 
 els.startBtn.addEventListener("click", async () => {
@@ -666,9 +1041,12 @@ els.startBtn.addEventListener("click", async () => {
     showPanel("all-done");
     return;
   }
-  const idx = queue.pop();
-  const clip = clips[idx];
-  await startRoundInFirestore(clip); // fast (<1s typically); players need this before guessing
+  requestFullscreen();
+  const clipId = queue.pop();
+  const clip = clipsById[clipId];
+  usedClipIds.push(clipId);
+  await startRoundInFirestore(clip); // fast (<1s typically); players need this before guessing — also bumps currentRoundIndex
+  await saveGameState(); // after the round-index bump above, so a resume lands on the right round number
   startAudioPhase(clip);
 });
 
@@ -711,7 +1089,7 @@ async function performReveal() {
   showPanel("answer");
 }
 
-function renderScoreboard(activeRow) {
+function renderScoreboard(activeRow, targetEl = els.scoreboardList) {
   const standings = Object.entries(teamsMap).map(([id, team]) => ({
     id,
     name: team.name,
@@ -720,11 +1098,11 @@ function renderScoreboard(activeRow) {
   }));
   standings.sort((a, b) => b.score - a.score);
 
-  els.scoreboardList.innerHTML = standings.length
+  targetEl.innerHTML = standings.length
     ? standings
         .map(
           (t) =>
-            `<div class="scoreboard-row${t.id === activeTeamId ? " active-row" : ""}"><span class="sb-name">${t.emoji} ${escapeHtml(t.name)}</span><span class="sb-score">${t.score}</span></div>`
+            `<div class="scoreboard-row${activeRow && t.id === activeRow.teamId ? " active-row" : ""}"><span class="sb-name">${t.emoji} ${escapeHtml(t.name)}</span><span class="sb-score">${t.score}</span></div>`
         )
         .join("")
     : '<div class="hint">No teams have joined yet.</div>';
@@ -732,18 +1110,31 @@ function renderScoreboard(activeRow) {
 
 els.revealBtn.addEventListener("click", performReveal);
 
-els.nextBtn.addEventListener("click", async () => {
+async function advanceToNextRound() {
   await returnToLobby();
   if (queue.length === 0) {
     showPanel("all-done");
   } else {
     showIdle();
   }
+}
+
+els.nextBtn.addEventListener("click", async () => {
+  const trivia = pickTriviaForClip(currentClip);
+  if (trivia && Math.random() < TRIVIA_CHANCE) {
+    await startTriviaRound(trivia);
+  } else {
+    await advanceToNextRound();
+  }
 });
+
+els.triviaContinueBtn.addEventListener("click", advanceToNextRound);
 
 els.reshuffleBtn.addEventListener("click", async () => {
   await returnToLobby();
+  usedClipIds = []; // the whole library is fair game again once it's been fully exhausted
   initQueue();
+  await saveGameState();
   showIdle();
 });
 
@@ -767,7 +1158,7 @@ els.importInput.addEventListener("change", async (e) => {
       const id = `${incoming.youtubeId}_${incoming.startSec}_${incoming.endSec}`;
       await setDoc(doc(db, "clipLibrary", id), incoming);
     }
-    await refreshLibrary();
+    await init();
   } catch (err) {
     alert(`Import failed: ${err.message}`);
   } finally {
@@ -777,5 +1168,21 @@ els.importInput.addEventListener("change", async (e) => {
 
 // ---------- Init ----------
 
-await refreshLibrary();
-ensureRoom();
+async function init() {
+  await loadLibrary();
+  if (clips.length === 0) {
+    showPanel("no-clips");
+    return;
+  }
+
+  const savedRoom = localStorage.getItem(ACTIVE_ROOM_KEY);
+  const resumable = savedRoom && (await tryLoadResumableGame(savedRoom));
+  if (resumable) {
+    showResumeChoice(resumable);
+  } else {
+    if (savedRoom) localStorage.removeItem(ACTIVE_ROOM_KEY); // stale pointer, room's gone
+    showNewGameSetup();
+  }
+}
+
+await init();

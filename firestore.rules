@@ -36,6 +36,9 @@ service cloud.firestore {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && request.resource.data.hostUid == request.auth.uid;
       allow update: if isHost(roomCode);
+      // "Finish game" deletes the room and its data so old games don't
+      // pile up in Firestore — only the host can trigger that cleanup.
+      allow delete: if isHost(roomCode);
 
       match /private/{docId} {
         allow read, write: if isHost(roomCode);
@@ -49,11 +52,22 @@ service cloud.firestore {
       match /teams/{teamId} {
         allow read: if isSignedIn();
         allow create, update: if isSignedIn();
+        allow delete: if isHost(roomCode);
       }
 
       match /rounds/{roundIndex}/guesses/{uid} {
         allow read: if isHost(roomCode) || (isSignedIn() && request.auth.uid == uid);
         allow create: if isSignedIn() && request.auth.uid == uid;
+        allow delete: if isHost(roomCode);
+      }
+
+      // Bonus trivia answers — same shape/rules as guesses above, just a
+      // separate subcollection since a trivia round can follow the same
+      // round index a guess round already used.
+      match /rounds/{roundIndex}/trivia/{uid} {
+        allow read: if isHost(roomCode) || (isSignedIn() && request.auth.uid == uid);
+        allow create: if isSignedIn() && request.auth.uid == uid;
+        allow delete: if isHost(roomCode);
       }
     }
   }

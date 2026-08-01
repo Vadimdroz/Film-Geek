@@ -37,6 +37,7 @@ const els = {
     guessing: document.getElementById("guessing-screen"),
     locked: document.getElementById("locked-screen"),
     revealed: document.getElementById("revealed-screen"),
+    trivia: document.getElementById("trivia-screen"),
   },
 
   roomCodeInput: document.getElementById("room-code-input"),
@@ -69,7 +70,15 @@ const els = {
 
   leaderboard: document.getElementById("leaderboard"),
   leaderboardList: document.getElementById("leaderboard-list"),
+
+  triviaQuestionText: document.getElementById("trivia-question-text"),
+  triviaTimer: document.getElementById("trivia-timer"),
+  triviaButtons: [...document.querySelectorAll(".trivia-btn")],
+  triviaLockedMessage: document.getElementById("trivia-locked-message"),
+  triviaResultMessage: document.getElementById("trivia-result-message"),
 };
+
+const TRIVIA_SHAPES = ["🔺", "♦️", "⬤", "◼️"];
 
 let roomCode = null;
 let myUid = null;
@@ -89,6 +98,8 @@ let currentActiveTeamId = null;
 let unsubRoom = null;
 let unsubGuesses = null;
 let unsubTeams = null;
+let unsubTriviaAnswer = null;
+let myTriviaAnswer = null;
 let countdownInterval = null;
 
 function normalize(s) {
@@ -426,6 +437,15 @@ function handleRoomUpdate(data) {
   } else if (data.phase === "revealed") {
     stopCountdown();
     renderRevealed(data.revealedAnswer);
+  } else if (data.phase === "trivia") {
+    stopCountdown();
+    renderTriviaQuestion(data.triviaQuestion);
+    attachTriviaAnswerListener(data.roundIndex);
+    startCountdown(data.triviaDeadline, els.triviaTimer);
+    showScreen("trivia");
+  } else if (data.phase === "trivia-revealed") {
+    stopCountdown();
+    renderTriviaRevealed(data.triviaResult);
   } else {
     stopCountdown();
     els.waitingTitle.textContent = "You're in!";
@@ -551,6 +571,81 @@ function renderRevealed(answer) {
   }
 }
 
+// ---------- Bonus trivia ----------
+// Open to every team, not just whoever's turn the round was — first
+// correct submission (earliest per-team, same "collaborate then submit"
+// model as the main guess) wins the points.
+
+function attachTriviaAnswerListener(roundIndex) {
+  if (unsubTriviaAnswer) unsubTriviaAnswer();
+  myTriviaAnswer = null;
+  const ref = collection(db, "rooms", roomCode, "rounds", String(roundIndex), "trivia");
+  unsubTriviaAnswer = onSnapshot(ref, (snap) => {
+    myTriviaAnswer = null;
+    snap.forEach((d) => {
+      if (d.id === myUid) myTriviaAnswer = d.data();
+    });
+    renderTriviaButtonsState();
+  });
+}
+
+function renderTriviaQuestion(q) {
+  if (!q) return;
+  els.triviaQuestionText.textContent = q.question;
+  els.triviaResultMessage.hidden = true;
+  els.triviaButtons.forEach((btn, i) => {
+    btn.textContent = `${TRIVIA_SHAPES[i]} ${q.options[i] || ""}`;
+    btn.classList.remove("correct-answer");
+  });
+  renderTriviaButtonsState();
+}
+
+function renderTriviaButtonsState() {
+  const locked = !!myTriviaAnswer;
+  els.triviaButtons.forEach((btn, i) => {
+    btn.disabled = locked;
+    btn.classList.toggle("selected", locked && myTriviaAnswer.selectedIndex === i);
+  });
+  els.triviaLockedMessage.hidden = !locked;
+}
+
+els.triviaButtons.forEach((btn, i) => {
+  btn.addEventListener("click", () => submitTriviaAnswer(i));
+});
+
+async function submitTriviaAnswer(index) {
+  if (myTriviaAnswer) return;
+  try {
+    await setDoc(doc(db, "rooms", roomCode, "rounds", String(lastSeenRoundIndex), "trivia", myUid), {
+      teamId,
+      selectedIndex: index,
+      submittedAt: serverTimestamp(),
+    });
+    // The trivia-answer listener picks this up and locks the buttons —
+    // same pattern as the main guess submit.
+  } catch (err) {
+    alert(`Couldn't submit: ${err.message}`);
+  }
+}
+
+function renderTriviaRevealed(result) {
+  if (!result) return;
+  els.triviaButtons.forEach((btn, i) => {
+    btn.disabled = true;
+    btn.classList.toggle("correct-answer", i === result.correctIndex);
+  });
+  els.triviaLockedMessage.hidden = true;
+  els.triviaResultMessage.hidden = false;
+  if (result.winnerTeamId === teamId) {
+    els.triviaResultMessage.textContent = "🏆 Your team got it first! +5 points";
+  } else if (result.winnerTeamId) {
+    els.triviaResultMessage.textContent = `${result.winnerEmoji || ""} ${result.winnerName || "Another team"} answered first.`;
+  } else {
+    els.triviaResultMessage.textContent = "Nobody got it right this time.";
+  }
+  showScreen("trivia");
+}
+
 // ---------- Leave room ----------
 
 function leaveRoom() {
@@ -565,6 +660,10 @@ function leaveRoom() {
   if (unsubTeams) {
     unsubTeams();
     unsubTeams = null;
+  }
+  if (unsubTriviaAnswer) {
+    unsubTriviaAnswer();
+    unsubTriviaAnswer = null;
   }
   stopCountdown();
 

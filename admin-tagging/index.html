@@ -84,6 +84,34 @@
     </div>
   </section>
 
+  <section class="card" id="trivia-section" hidden>
+    <h2>4. Bonus trivia (optional)</h2>
+    <p class="hint">Shown occasionally after this clip's reveal — all teams race to answer, first correct one wins 5 points.</p>
+    <div id="trivia-list" class="trivia-list"></div>
+    <div class="row">
+      <label class="grow">Question <input id="trivia-question-input" type="text" placeholder="e.g. What year did this sequel come out?" /></label>
+    </div>
+    <div class="row trivia-options-row">
+      <label class="grow">Option A <input id="trivia-opt-0" type="text" /></label>
+      <label class="grow">Option B <input id="trivia-opt-1" type="text" /></label>
+    </div>
+    <div class="row trivia-options-row">
+      <label class="grow">Option C <input id="trivia-opt-2" type="text" /></label>
+      <label class="grow">Option D <input id="trivia-opt-3" type="text" /></label>
+    </div>
+    <div class="row">
+      <label>Correct answer
+        <select id="trivia-correct-select">
+          <option value="0">A</option>
+          <option value="1">B</option>
+          <option value="2">C</option>
+          <option value="3">D</option>
+        </select>
+      </label>
+      <button id="add-trivia-btn">+ Add trivia question</button>
+    </div>
+  </section>
+
   <section class="card" id="library-section">
     <h2>Clip library <span id="clip-count" class="clip-count"></span></h2>
     <div class="row library-toolbar">

@@ -171,6 +171,32 @@ input#room-code-input {
 .revealed-breakdown .result-correct { color: var(--ok); }
 .revealed-breakdown .result-wrong { color: var(--bad); }
 
+.trivia-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.trivia-btn {
+  min-height: 5.5rem;
+  padding: 0.75rem;
+  border-radius: 14px;
+  border: none;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #fff;
+  cursor: pointer;
+}
+.trivia-btn:disabled { opacity: 0.4; cursor: default; }
+.trivia-btn.selected { box-shadow: 0 0 0 4px #fff inset; }
+.trivia-btn.correct-answer { box-shadow: 0 0 0 4px #fff inset; }
+
+.trivia-red { background: #c0392b; }
+.trivia-blue { background: #2b6cb0; }
+.trivia-yellow { background: #b7891f; }
+.trivia-green { background: #2f855a; }
+
 #leaderboard {
   max-width: 480px;
   margin: 0 auto 2rem;

@@ -20,6 +20,8 @@
   <div id="brand-mask-bottom"></div>
 </div>
 
+<button id="fullscreen-btn" class="fullscreen-btn">⛶ Fullscreen</button>
+
 <div id="hud" hidden>
   <span id="timer">10</span>s
   <button id="stop-early-btn">Stop clip</button>
@@ -29,17 +31,34 @@
   <div class="cover-inner">
     <div class="logo">🎬 Film-Geek</div>
 
-    <div id="room-info" class="room-info">
+    <div id="room-info" class="room-info" hidden>
       <p>Join at <strong>vadimdroz.github.io/Film-Geek/player/</strong> with room code</p>
       <p class="room-code" id="room-code-display">----</p>
+      <p id="game-name-display" class="hint"></p>
       <p id="player-count" class="hint"></p>
       <p id="round-indicator" class="hint"></p>
       <p id="turn-indicator" class="queue-status"></p>
     </div>
 
-    <div id="idle-panel">
+    <div id="setup-panel" hidden>
+      <div id="resume-block" hidden>
+        <p class="queue-status">Resume <strong id="resume-game-name"></strong>?</p>
+        <p class="hint" id="resume-game-detail"></p>
+        <button id="resume-btn" class="giant-btn">▶ Resume game</button>
+        <p><button id="start-fresh-btn" class="link-btn">Start a new game instead</button></p>
+      </div>
+      <div id="new-game-block">
+        <label class="grow">Game name
+          <input type="text" id="game-name-input" placeholder="e.g. Friday movie night" autocomplete="off" />
+        </label>
+        <button id="new-game-btn" class="giant-btn">Start new game</button>
+      </div>
+    </div>
+
+    <div id="idle-panel" hidden>
       <p id="queue-status" class="queue-status"></p>
       <button id="start-btn" class="giant-btn" disabled>Loading player…</button>
+      <p><button id="finish-game-btn" class="link-btn">Finish game &amp; clear history</button></p>
     </div>
 
     <div id="error-panel" hidden>
@@ -83,9 +102,28 @@
       <button id="next-btn" class="giant-btn">Next clip →</button>
     </div>
 
+    <div id="trivia-panel" hidden>
+      <p class="queue-status">🎯 Bonus trivia!</p>
+      <h2 id="trivia-question" class="trivia-question"></h2>
+      <div id="trivia-options" class="trivia-options"></div>
+      <p id="trivia-timer" class="room-code">12</p>
+      <p id="trivia-count" class="hint"></p>
+    </div>
+
+    <div id="trivia-result-panel" hidden>
+      <div id="trivia-result-banner" class="round-result-banner"></div>
+      <div id="trivia-result-options" class="trivia-options"></div>
+      <div class="scoreboard">
+        <h2>Scoreboard</h2>
+        <div id="trivia-scoreboard-list" class="scoreboard-list"></div>
+      </div>
+      <button id="trivia-continue-btn" class="giant-btn">Continue →</button>
+    </div>
+
     <div id="all-done-panel" hidden>
       <p>That's every clip in the library.</p>
       <button id="reshuffle-btn" class="giant-btn">Reshuffle &amp; play again</button>
+      <p><button id="finish-game-btn-alldone" class="link-btn">Finish game &amp; clear history</button></p>
     </div>
   </div>
 </div>

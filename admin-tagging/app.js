@@ -53,6 +53,13 @@ const els = {
   saveClipBtn: document.getElementById("save-clip-btn"),
   cancelEditBtn: document.getElementById("cancel-edit-btn"),
 
+  triviaSection: document.getElementById("trivia-section"),
+  triviaList: document.getElementById("trivia-list"),
+  triviaQuestionInput: document.getElementById("trivia-question-input"),
+  triviaOptInputs: [0, 1, 2, 3].map((i) => document.getElementById(`trivia-opt-${i}`)),
+  triviaCorrectSelect: document.getElementById("trivia-correct-select"),
+  addTriviaBtn: document.getElementById("add-trivia-btn"),
+
   clipCount: document.getElementById("clip-count"),
   exportBtn: document.getElementById("export-btn"),
   importInput: document.getElementById("import-input"),
@@ -68,6 +75,51 @@ let currentVideoId = null;
 let currentEmbeddable = null; // true | false | null (unknown)
 let editingClipId = null; // null = adding new clip, otherwise the Firestore doc id being edited
 let clips = []; // live-synced from Firestore, each entry carries its own .id
+let pendingTrivia = []; // trivia questions staged for the clip currently being added/edited
+
+// ---------- Bonus trivia ----------
+
+function renderTriviaList() {
+  els.triviaList.innerHTML = pendingTrivia
+    .map(
+      (t, i) => `
+      <div class="trivia-item">
+        <span class="trivia-item-text">${escapeHtml(t.question)} <span class="trivia-item-answer">(${"ABCD"[t.correctIndex]}: ${escapeHtml(t.options[t.correctIndex])})</span></span>
+        <button type="button" data-index="${i}" class="remove-trivia-btn">Remove</button>
+      </div>`
+    )
+    .join("");
+  els.triviaList.querySelectorAll(".remove-trivia-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      pendingTrivia.splice(Number(btn.dataset.index), 1);
+      renderTriviaList();
+    });
+  });
+}
+
+function clearTriviaInputs() {
+  els.triviaQuestionInput.value = "";
+  els.triviaOptInputs.forEach((input) => (input.value = ""));
+  els.triviaCorrectSelect.value = "0";
+}
+
+els.addTriviaBtn.addEventListener("click", () => {
+  const question = els.triviaQuestionInput.value.trim();
+  const options = els.triviaOptInputs.map((input) => input.value.trim());
+  if (!question || options.some((o) => !o)) {
+    alert("Fill in the question and all 4 options first.");
+    return;
+  }
+  pendingTrivia.push({ question, options, correctIndex: Number(els.triviaCorrectSelect.value) });
+  clearTriviaInputs();
+  renderTriviaList();
+});
+
+function escapeHtml(s) {
+  const div = document.createElement("div");
+  div.textContent = s;
+  return div.innerHTML;
+}
 
 // ---------- YouTube ID parsing ----------
 
@@ -160,6 +212,7 @@ els.checkBtn.addEventListener("click", async () => {
 function openPlayerFor(videoId) {
   els.playerSection.hidden = false;
   els.metadataSection.hidden = false;
+  els.triviaSection.hidden = false;
   els.metadataTitleDisplay.textContent = els.movieTitle.value.trim() || "(untitled)";
 
   const start = () => {
@@ -385,6 +438,10 @@ function resetForm() {
   els.checkResult.className = "check-result";
   els.playerSection.hidden = true;
   els.metadataSection.hidden = true;
+  els.triviaSection.hidden = true;
+  pendingTrivia = [];
+  clearTriviaInputs();
+  renderTriviaList();
   els.startSec.value = "0";
   els.endSec.value = "10";
   els.durationDisplay.textContent = "";
@@ -425,6 +482,7 @@ els.saveClipBtn.addEventListener("click", async () => {
     genre: els.movieGenre.value.trim(),
     difficulty: els.movieDifficulty.value,
     notes: els.movieNotes.value.trim(),
+    trivia: pendingTrivia,
     embeddable: currentEmbeddable,
     addedAt: editingClipId ? clips.find((c) => c.id === editingClipId)?.addedAt || new Date().toISOString() : new Date().toISOString(),
   };
@@ -523,6 +581,10 @@ function loadClipIntoForm(clip) {
   els.movieGenre.value = clip.genre || "";
   els.movieDifficulty.value = clip.difficulty || "medium";
   els.movieNotes.value = clip.notes || "";
+
+  pendingTrivia = (clip.trivia || []).map((t) => ({ ...t }));
+  clearTriviaInputs();
+  renderTriviaList();
 
   els.cancelEditBtn.hidden = false;
   openPlayerFor(clip.youtubeId); // also syncs metadata-title-display from movieTitle

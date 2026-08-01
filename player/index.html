@@ -74,6 +74,20 @@
     <p class="hint">Waiting for the reveal…</p>
   </section>
 
+  <section id="trivia-screen" class="screen" hidden>
+    <h1>🎯 Bonus trivia!</h1>
+    <p id="trivia-question-text" class="hint"></p>
+    <p class="timer-display"><span id="trivia-timer">12</span>s left</p>
+    <div id="trivia-buttons" class="trivia-buttons">
+      <button type="button" class="trivia-btn trivia-red" data-index="0"></button>
+      <button type="button" class="trivia-btn trivia-blue" data-index="1"></button>
+      <button type="button" class="trivia-btn trivia-yellow" data-index="2"></button>
+      <button type="button" class="trivia-btn trivia-green" data-index="3"></button>
+    </div>
+    <p id="trivia-locked-message" class="hint" hidden>Answer locked in — waiting for the reveal…</p>
+    <p id="trivia-result-message" class="hint" hidden></p>
+  </section>
+
   <section id="revealed-screen" class="screen" hidden>
     <h1 id="revealed-title"></h1>
     <p id="revealed-meta" class="hint"></p>
