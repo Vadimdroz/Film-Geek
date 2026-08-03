@@ -74,10 +74,14 @@
     </div>
 
     <div id="audio-panel" hidden>
-      <p class="queue-status">🔊 Audio only — every team decides!</p>
+      <p class="queue-status">🔊 Audio only — race to answer for double points!</p>
       <p id="audio-timer" class="room-code">15</p>
-      <p id="audio-decided-count" class="hint"></p>
-      <p class="hint">Answer now for double points, or wait for the video.</p>
+      <p class="hint">First team to buzz in claims it — everyone else waits for the video.</p>
+    </div>
+
+    <div id="audio-claimed-panel" hidden>
+      <p class="queue-status">🔊 <strong id="audio-claimed-label"></strong> is answering on audio!</p>
+      <p class="hint">Everyone else — video's up next.</p>
     </div>
 
     <div id="ended-panel" hidden>

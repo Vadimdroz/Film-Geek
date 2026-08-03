@@ -117,12 +117,6 @@ input#room-code-input {
 
 .giant-btn:disabled { background: #3a3a3f; color: var(--muted); }
 
-.secondary-btn {
-  background: transparent;
-  border: 2px solid var(--accent);
-  color: var(--accent);
-}
-
 .error-text { color: var(--bad); font-size: 0.95rem; min-height: 1.2em; margin-top: 1rem; }
 
 .emoji-grid {

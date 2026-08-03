@@ -21,7 +21,6 @@ import {
 const ROOM_KEY = "filmgeek_player_room";
 const TEAM_ID_KEY = "filmgeek_player_team_id";
 const NAME_KEY = "filmgeek_player_name";
-const GUESS_WINDOW_MS = 60000; // matches host/app.js — the local clock a team gets once it answers on audio alone
 
 const EMOJI_SET = ["🍿", "🎬", "🕶️", "🦖", "🐉", "👽", "🤖", "🧙", "🥷", "🦸", "🎭", "🍕", "🐒", "🚀", "💀", "👑", "🎩", "🔫"];
 
@@ -53,7 +52,6 @@ const els = {
 
   audioPlayerTimer: document.getElementById("audio-player-timer"),
   answerNowBtn: document.getElementById("answer-now-btn"),
-  goToVideoBtn: document.getElementById("go-to-video-btn"),
 
   playerTimer: document.getElementById("player-timer"),
   movieInput: document.getElementById("movie-input"),
@@ -80,6 +78,7 @@ const els = {
 };
 
 const TRIVIA_SHAPES = ["🔺", "♦️", "⬤", "◼️"];
+const ANSWER_NOW_DEFAULT_LABEL = els.answerNowBtn.textContent;
 
 let roomCode = null;
 let myUid = null;
@@ -92,8 +91,8 @@ let selectedEmoji = null;
 let currentPhase = null;
 let lastSeenRoundIndex = -1;
 let myTeamGuessThisRound = null;
-let myAudioChoiceThisRound = null; // null | "answer_now" | "go_to_video" — this team's own choice, independent of any other team's
 let movieIndex = { titles: [] };
+let teamsCache = {}; // teamId -> team data, so the "waiting" screen can name whoever won the audio-only race
 let lastRoomData = null; // cached so the guesses listener can re-derive the right screen without waiting for the next room update
 
 let unsubRoom = null;
@@ -348,8 +347,11 @@ function attachTeamsListener() {
   if (unsubTeams) unsubTeams();
   unsubTeams = onSnapshot(collection(db, "rooms", roomCode, "teams"), (snap) => {
     const teams = [];
+    teamsCache = {};
     snap.forEach((d) => {
-      teams.push({ id: d.id, ...d.data() });
+      const t = { id: d.id, ...d.data() };
+      teams.push(t);
+      teamsCache[d.id] = t;
     });
     teams.sort((a, b) => (b.score || 0) - (a.score || 0));
 
@@ -386,7 +388,7 @@ function attachRoundGuessListener(roundIndex) {
     // guess status changes — matters most right after we submit, so we
     // flip to "locked" immediately instead of waiting on the next room
     // update (which may not arrive until other teams finish too).
-    const relevantPhase = currentPhase === "audio" || currentPhase === "playing" || currentPhase === "guessing";
+    const relevantPhase = currentPhase === "audio-claimed" || currentPhase === "playing" || currentPhase === "guessing";
     if (relevantPhase && lastRoomData) handleRoomUpdate(lastRoomData);
   });
 }
@@ -396,32 +398,29 @@ function handleRoomUpdate(data) {
 
   if (data.roundIndex !== lastSeenRoundIndex) {
     lastSeenRoundIndex = data.roundIndex;
-    myAudioChoiceThisRound = null;
     attachRoundGuessListener(data.roundIndex);
   }
 
-  // A team that chose "answer now" runs its own independent guess clock
-  // from the moment they chose it, regardless of what the room's phase
-  // does next (video/guessing for whichever OTHER teams still need it) —
-  // until they submit, their screen doesn't follow the room at all. Once
-  // the round is actually over (revealed/lobby/trivia) this stops
-  // applying so they're never stuck looking at a stale guess form.
-  const midRound = data.phase === "audio" || data.phase === "playing" || data.phase === "guessing";
-  if (midRound && myAudioChoiceThisRound === "answer_now" && !myTeamGuessThisRound) {
-    return;
-  }
-
   if (data.phase === "audio") {
-    if (myTeamGuessThisRound) {
-      showLocked(myTeamGuessThisRound);
-    } else if (myAudioChoiceThisRound === "go_to_video") {
-      stopCountdown();
-      els.waitingTitle.textContent = "🔊 Listen up!";
-      els.waitingMessage.textContent = "Waiting for the video — get ready to answer once it ends.";
-      showScreen("waiting");
+    startCountdown(data.audioDeadline, els.audioPlayerTimer);
+    els.answerNowBtn.disabled = false;
+    els.answerNowBtn.textContent = ANSWER_NOW_DEFAULT_LABEL;
+    showScreen("audioChoice");
+  } else if (data.phase === "audio-claimed") {
+    stopCountdown();
+    if (data.audioClaimedTeamId === teamId) {
+      if (myTeamGuessThisRound) {
+        showLocked(myTeamGuessThisRound);
+      } else {
+        startCountdown(data.audioClaimedDeadline, els.playerTimer);
+        showScreen("guessing");
+      }
     } else {
-      startCountdown(data.audioDeadline, els.audioPlayerTimer);
-      showScreen("audioChoice");
+      const claimedTeam = teamsCache[data.audioClaimedTeamId];
+      const label = claimedTeam ? `${claimedTeam.emoji || ""} ${claimedTeam.name}`.trim() : "Another team";
+      els.waitingTitle.textContent = "🔊 Audio's over!";
+      els.waitingMessage.textContent = `${label} buzzed in first — video's up next.`;
+      showScreen("waiting");
     }
   } else if (data.phase === "playing") {
     stopCountdown();
@@ -456,32 +455,31 @@ function handleRoomUpdate(data) {
 }
 
 // ---------- Audio-only choice ----------
-// Every team decides independently — there's no turn order, and this
-// choice never depends on (or affects) what any other team does.
+// It's a race, not an independent per-team choice — first team to buzz
+// in claims the double-points bonus and the host stops the audio for
+// everyone else. There's no separate "wait for video" action to take;
+// not buzzing in just means waiting.
 
-els.answerNowBtn.addEventListener("click", chooseAudioOnly);
-els.goToVideoBtn.addEventListener("click", chooseWaitForVideo);
+els.answerNowBtn.addEventListener("click", buzzIn);
 
-function chooseAudioOnly() {
-  myAudioChoiceThisRound = "answer_now";
-  startCountdown(Date.now() + GUESS_WINDOW_MS, els.playerTimer);
-  showScreen("guessing");
-  // Written to our own team doc purely so the host can show a live "N of
-  // M teams decided" tally — our screen has already moved on locally and
-  // doesn't wait on this write or on anything the host does.
-  updateDoc(doc(db, "rooms", roomCode, "teams", teamId), {
-    audioChoice: "answer_now",
-    audioChoiceRound: lastSeenRoundIndex,
-  }).catch((err) => console.error("Couldn't record audio choice", err));
-}
-
-function chooseWaitForVideo() {
-  myAudioChoiceThisRound = "go_to_video";
-  updateDoc(doc(db, "rooms", roomCode, "teams", teamId), {
-    audioChoice: "go_to_video",
-    audioChoiceRound: lastSeenRoundIndex,
-  }).catch((err) => console.error("Couldn't record audio choice", err));
-  if (lastRoomData) handleRoomUpdate(lastRoomData);
+async function buzzIn() {
+  els.answerNowBtn.disabled = true;
+  els.answerNowBtn.textContent = "Buzzing in…";
+  try {
+    await updateDoc(doc(db, "rooms", roomCode, "teams", teamId), {
+      audioChoice: "answer_now",
+      audioChoiceRound: lastSeenRoundIndex,
+      audioChoiceAt: serverTimestamp(),
+    });
+    // The host decides who actually won the race (earliest timestamp) and
+    // updates the room's phase to "audio-claimed" — our own screen only
+    // moves on once that comes back through handleRoomUpdate, so a team
+    // that buzzed a beat too late doesn't get stuck thinking it's their turn.
+  } catch (err) {
+    alert(`Couldn't buzz in: ${err.message}`);
+    els.answerNowBtn.disabled = false;
+    els.answerNowBtn.textContent = ANSWER_NOW_DEFAULT_LABEL;
+  }
 }
 
 function renderGuessingOrLocked() {
@@ -554,7 +552,7 @@ els.submitGuessBtn.addEventListener("click", async () => {
       yearGuess,
       actor1Guess,
       actor2Guess,
-      audioOnly: myAudioChoiceThisRound === "answer_now",
+      audioOnly: currentPhase === "audio-claimed" && lastRoomData?.audioClaimedTeamId === teamId,
       submittedAt: serverTimestamp(),
     });
     // The round-guess listener will pick this up and flip to the locked
@@ -732,7 +730,6 @@ function leaveRoom() {
   teamEmoji = null;
   lastSeenRoundIndex = -1;
   myTeamGuessThisRound = null;
-  myAudioChoiceThisRound = null;
   lastRoomData = null;
   currentPhase = null;
 

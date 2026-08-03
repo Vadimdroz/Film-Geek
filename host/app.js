@@ -61,8 +61,10 @@ const els = {
   importInput: document.getElementById("import-input"),
 
   audioPanel: document.getElementById("audio-panel"),
-  audioDecidedCount: document.getElementById("audio-decided-count"),
   audioTimer: document.getElementById("audio-timer"),
+
+  audioClaimedPanel: document.getElementById("audio-claimed-panel"),
+  audioClaimedLabel: document.getElementById("audio-claimed-label"),
 
   endedPanel: document.getElementById("ended-panel"),
   guessTimer: document.getElementById("guess-timer"),
@@ -131,6 +133,15 @@ let roundRevealed = false;
 
 let audioCountdownInterval = null;
 let audioTimeout = null;
+
+// The audio-only bonus is a race, not an independent per-team choice —
+// first team to buzz in claims it, audio stops for the room, and
+// everyone else just waits for the video. These track that race per
+// round (reset in startRoundInFirestore).
+let audioClaimTeamId = null; // which team (if any) claimed the audio-only slot this round
+let audioClaimHandled = false; // guards against handling more than one claim
+let audioClaimFallbackTimeout = null; // in case the claiming team never submits
+let videoShownThisRound = false; // guards revealVideo from firing twice (claim-submit path vs. a timeout racing it)
 
 // Points per field, summed rather than a flat per-field amount — movie
 // title is worth the most since it's the actual point of the game, year
@@ -213,8 +224,8 @@ async function createRoom(gameName) {
 }
 
 // Shared by both a freshly-created room and a resumed one — subscribes to
-// the teams subcollection for the roster/score display and the live
-// "N of M teams decided" count shown during the audio phase.
+// the teams subcollection for the roster/score display and for spotting
+// the winner of the audio-only race (see maybeHandleAudioClaim).
 function subscribeToRoomTeams() {
   onSnapshot(collection(db, "rooms", roomCode, "teams"), (snap) => {
     teamsMap = {};
@@ -226,22 +237,59 @@ function subscribeToRoomTeams() {
         ? "0 teams joined"
         : `${teamCount} team${teamCount === 1 ? "" : "s"}, ${playerCount} player${playerCount === 1 ? "" : "s"} joined`;
 
-    updateAudioDecidedCount();
+    maybeHandleAudioClaim();
   });
 }
 
-// Every team decides independently whether to answer on audio alone —
-// each team's choice lives on their own team doc (they're already allowed
-// to write it), so the host just tallies how many have decided so far.
-function countTeamsDecidedThisRound() {
-  return Object.values(teamsMap).filter((t) => t.audioChoiceRound === currentRoundIndex && t.audioChoice).length;
+// A team claims the audio-only slot by writing audioChoice/audioChoiceRound
+// (+ a server timestamp for tie-breaking) to its own team doc — teams
+// can't write the room doc directly, only the host can. If more than one
+// team's write lands in the same snapshot, the earliest audioChoiceAt
+// wins; everyone else just missed it this round.
+function maybeHandleAudioClaim() {
+  // videoShownThisRound also covers the race where a buzz-in arrives just
+  // after the natural 15s window already expired and revealed the video —
+  // once that's happened, a late claim would otherwise yank the room back
+  // out of "playing" into "audio-claimed", which would be a jarring bug.
+  if (audioClaimHandled || !currentClip || videoShownThisRound || roundRevealed) return;
+  const claimants = Object.entries(teamsMap)
+    .filter(([, t]) => t.audioChoiceRound === currentRoundIndex && t.audioChoice === "answer_now")
+    .sort((a, b) => (a[1].audioChoiceAt?.toMillis?.() ?? 0) - (b[1].audioChoiceAt?.toMillis?.() ?? 0));
+  if (claimants.length === 0) return;
+
+  audioClaimHandled = true;
+  claimAudioSlot(claimants[0][0]);
 }
 
-function updateAudioDecidedCount() {
-  if (els.audioPanel.hidden) return; // only relevant while the audio phase is showing
-  const total = Object.keys(teamsMap).length;
-  const decided = countTeamsDecidedThisRound();
-  els.audioDecidedCount.textContent = total ? `${decided} of ${total} team${total === 1 ? "" : "s"} decided` : "";
+// The winning team's audio-only opportunity — the room's audio stops
+// immediately (there's nothing left for anyone else to gain by more
+// listening once someone's claimed it), and everyone else just waits
+// while that team answers.
+async function claimAudioSlot(teamId) {
+  stopAudioPhaseTimers();
+  ytPlayer.pauseVideo();
+  audioClaimTeamId = teamId;
+
+  const deadline = Date.now() + GUESS_WINDOW_MS;
+  showPanel("audio-claimed");
+  const team = teamsMap[teamId] || {};
+  els.audioClaimedLabel.textContent = `${team.emoji || ""} ${team.name || "A team"}`.trim();
+
+  if (roomCode) {
+    await updateDoc(doc(db, "rooms", roomCode), {
+      phase: "audio-claimed",
+      audioClaimedTeamId: teamId,
+      audioClaimedDeadline: deadline,
+    }).catch((err) => console.error("claimAudioSlot failed", err));
+  }
+
+  // Safety net in case the claiming team never actually submits (closed
+  // their phone, etc.) — the guesses listener normally moves things along
+  // as soon as they submit (see attachGuessListener), this is the fallback.
+  if (audioClaimFallbackTimeout) clearTimeout(audioClaimFallbackTimeout);
+  audioClaimFallbackTimeout = setTimeout(() => {
+    if (!roundRevealed && !videoShownThisRound) revealVideo(currentClip);
+  }, GUESS_WINDOW_MS);
 }
 
 // Persists enough of the in-progress game (which clips are left/used, the
@@ -371,6 +419,13 @@ async function startRoundInFirestore(clip) {
   try {
     currentRoundIndex += 1;
     roundRevealed = false;
+    audioClaimTeamId = null;
+    audioClaimHandled = false;
+    videoShownThisRound = false;
+    if (audioClaimFallbackTimeout) {
+      clearTimeout(audioClaimFallbackTimeout);
+      audioClaimFallbackTimeout = null;
+    }
     updateRoundIndicator();
 
     await setDoc(
@@ -381,6 +436,8 @@ async function startRoundInFirestore(clip) {
         revealedAnswer: null,
         guessDeadline: null,
         audioDeadline: null,
+        audioClaimedTeamId: null,
+        audioClaimedDeadline: null,
         activeTeamId: null, // no more turn rotation — kept null for old resumed-game docs that still have a stale value
       },
       { merge: true }
@@ -410,14 +467,27 @@ function attachGuessListener(roundIndex) {
   unsubscribeGuesses = onSnapshot(ref, (snap) => {
     currentGuesses = {};
     snap.forEach((d) => (currentGuesses[d.id] = d.data()));
-    const teamsAnswered = new Set(Object.values(currentGuesses).map((g) => g.teamId)).size;
+    const answeredTeamIds = new Set(Object.values(currentGuesses).map((g) => g.teamId));
+    const teamsAnswered = answeredTeamIds.size;
     els.guessCount.textContent = teamsAnswered === 1 ? "1 team has answered" : `${teamsAnswered} teams have answered`;
 
-    // Every team can answer independently now (some during the audio
-    // phase, some after watching the clip) — this listener sees both, so
-    // once every currently-joined team has locked in an answer there's no
-    // reason to keep waiting on a timer or for the video to even play.
     const totalTeams = Object.keys(teamsMap).length;
+
+    // The team that claimed the audio-only slot just submitted — move
+    // straight to the video for whoever's left (or straight to reveal if
+    // they were the only team in the room, since there's no one left to
+    // show a video to).
+    if (audioClaimTeamId && !videoShownThisRound && !roundRevealed && answeredTeamIds.has(audioClaimTeamId)) {
+      if (teamsAnswered < totalTeams) {
+        revealVideo(currentClip);
+      } else {
+        performReveal();
+      }
+      return;
+    }
+
+    // Every currently-joined team has locked in an answer — no reason to
+    // keep waiting on a timer.
     if (totalTeams > 0 && teamsAnswered >= totalTeams && !roundRevealed) {
       performReveal();
     }
@@ -814,6 +884,7 @@ function showPanel(name) {
   els.idlePanel.hidden = name !== "idle";
   els.noClipsPanel.hidden = name !== "no-clips";
   els.audioPanel.hidden = name !== "audio";
+  els.audioClaimedPanel.hidden = name !== "audio-claimed";
   els.endedPanel.hidden = name !== "ended";
   els.answerPanel.hidden = name !== "answer";
   els.triviaPanel.hidden = name !== "trivia";
@@ -931,17 +1002,16 @@ els.errorSkipBtn.addEventListener("click", async () => {
 // same play-through covers YouTube's brief start-of-video title/info
 // overlay, so by the time video is revealed (always at least
 // AUDIO_ONLY_WINDOW_MS in) that overlay has long since disappeared and
-// there's no need for a separate reveal buffer. Every team decides for
-// itself, independently, whether to answer now (double points, on their
-// own phone, whenever they're ready) or wait for the video — there's no
-// turn order, and one team's choice never cuts another team's window
-// short. If a team hasn't decided by the time this phase ends, the video
-// just reveals for the room and they answer after watching it instead.
+// there's no need for a separate reveal buffer. It's a race, not an
+// independent per-team choice — any team can buzz in for double points,
+// but the FIRST one to do so claims it: audio stops immediately (see
+// claimAudioSlot) and everyone else just waits for the video. If nobody
+// claims it before this window runs out, the video reveals normally and
+// every team answers after watching it.
 function startAudioPhase(clip) {
   currentClip = clip;
   els.hud.hidden = true;
   showPanel("audio");
-  updateAudioDecidedCount();
   els.audioTimer.textContent = Math.round(AUDIO_ONLY_WINDOW_MS / 1000);
 
   ytPlayer.loadVideoById({ videoId: clip.youtubeId, startSeconds: clip.startSec });
@@ -966,10 +1036,10 @@ function startAudioPhase(clip) {
 
   if (audioTimeout) clearTimeout(audioTimeout);
   audioTimeout = setTimeout(() => {
-    // If every team already answered during the audio window, the guess
-    // listener's auto-reveal (see attachGuessListener) has already fired
-    // and set roundRevealed — nothing left to do, the video isn't needed.
-    if (!roundRevealed) revealVideo(clip);
+    // If a team already claimed the audio-only slot, that team's own
+    // fallback timer (see claimAudioSlot) governs what happens next —
+    // this one just no-ops.
+    if (!roundRevealed && !audioClaimHandled) revealVideo(clip);
   }, AUDIO_ONLY_WINDOW_MS);
 }
 
@@ -984,15 +1054,24 @@ function stopAudioPhaseTimers() {
   }
 }
 
-// The audio window ran out with at least one team still needing the
-// video — it's already been playing (audio-only, hidden behind the
-// cover) since startAudioPhase, so this just reveals what's already
-// running in place rather than reloading/restarting it from the top.
-// Teams that already locked in an audio-only guess are unaffected —
-// their player screen shows "locked" regardless of what plays on the TV.
+// Either the audio window ran out with nobody claiming it, or the team
+// that did claim it just submitted (or ran out its own fallback timer) —
+// either way, video reveals for whoever's left. It's already been
+// playing (audio-only, hidden behind the cover) since startAudioPhase, so
+// this just reveals what's already running in place rather than
+// reloading/restarting it from the top. A team that already locked in an
+// audio-only guess is unaffected — their player screen shows "locked"
+// regardless of what plays on the TV.
 function revealVideo(clip) {
+  if (videoShownThisRound) return; // guard against the claim-submit path and its fallback timeout both firing
+  videoShownThisRound = true;
   stopAudioPhaseTimers();
+  if (audioClaimFallbackTimeout) {
+    clearTimeout(audioClaimFallbackTimeout);
+    audioClaimFallbackTimeout = null;
+  }
   currentClip = clip;
+  ytPlayer.playVideo(); // resumes playback if claimAudioSlot paused it while the claiming team answered
 
   if (roomCode) {
     updateDoc(doc(db, "rooms", roomCode), { phase: "playing" }).catch((err) =>
