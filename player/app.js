@@ -573,7 +573,7 @@ els.submitGuessBtn.addEventListener("click", async () => {
   els.submitGuessBtn.disabled = true;
   els.submitGuessBtn.textContent = "Locking in…";
   try {
-    await setDoc(doc(db, "rooms", roomCode, "rounds", String(lastSeenRoundIndex), "guesses", myUid), {
+    const guess = {
       teamId,
       movieGuess,
       yearGuess,
@@ -581,9 +581,16 @@ els.submitGuessBtn.addEventListener("click", async () => {
       actor2Guess,
       audioOnly: currentPhase === "audio-claimed" && lastRoomData?.audioClaimedTeamId === teamId,
       submittedAt: serverTimestamp(),
-    });
-    // The round-guess listener will pick this up and flip to the locked
-    // screen automatically once Firestore confirms the write.
+    };
+    await setDoc(doc(db, "rooms", roomCode, "rounds", String(lastSeenRoundIndex), "guesses", myUid), guess);
+    // Lock the screen immediately rather than waiting on the round-guess
+    // listener's round-trip — that gap used to leave the form re-tappable
+    // for a moment after a successful submit, and a second tap in that
+    // window hit Firestore as an update to a doc that already exists
+    // (not a create), which the rules reject. The listener will overwrite
+    // this local copy with the real server data a moment later, same doc.
+    myTeamGuessThisRound = guess;
+    showLocked(guess);
   } catch (err) {
     alert(`Couldn't submit your guess: ${err.message}`);
   } finally {

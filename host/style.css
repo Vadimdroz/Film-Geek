@@ -133,15 +133,15 @@ html, body {
   /* Some browsers/OS settings always render a scrollbar track even when
      nothing needs to scroll — on this dark, narrow-and-centered box that
      shows up as a bright vertical seam against the black background on
-     either side. Theming it thin and dark keeps it functional (still
-     scrolls when content is actually taller than the screen) without it
-     reading as a rendering glitch. */
-  scrollbar-width: thin;
-  scrollbar-color: #333 transparent;
+     either side, reading as a rendering glitch rather than a scrollbar.
+     Theming it (thin + dark) still left it visible on at least one
+     setup, so it's just fully hidden instead — touch/trackpad/keyboard
+     scrolling still works via overflow-y: auto, a visible thumb was
+     never actually required. */
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* old Edge/IE */
 }
-.cover-inner::-webkit-scrollbar { width: 6px; }
-.cover-inner::-webkit-scrollbar-track { background: transparent; }
-.cover-inner::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+.cover-inner::-webkit-scrollbar { display: none; } /* Chrome/Safari */
 
 .logo {
   font-size: 1.6rem;
