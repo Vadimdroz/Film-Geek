@@ -126,7 +126,7 @@ html, body {
 }
 
 .cover-inner {
-  max-width: 640px;
+  max-width: min(92vw, 1400px);
   max-height: 100vh;
   overflow-y: auto;
   padding: 2rem;
@@ -196,21 +196,23 @@ html, body {
 .round-result-banner.win { background: rgba(108, 199, 133, 0.15); color: #6cc785; }
 .round-result-banner.lose { background: rgba(255, 138, 128, 0.12); color: #ff8a80; }
 
+/* One card per team that answered this round — every team can answer
+   independently now, so a round can have several results to show at
+   once. A grid instead of a vertical stack means more teams use the
+   screen's width instead of pushing the page taller and taller. */
 .round-breakdown {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
   text-align: left;
   font-size: 1.15rem;
-  line-height: 1.7;
   margin-bottom: 2rem;
 }
 
-/* One card per team that answered this round — every team can answer
-   independently now, so a round can have several results to show at once
-   instead of just one. */
 .team-result-card {
   background: #14151a;
   border-radius: 12px;
   padding: 0.9rem 1.1rem;
-  margin-bottom: 0.75rem;
   font-size: 1.05rem;
   line-height: 1.6;
 }
@@ -255,7 +257,11 @@ html, body {
   margin: 0 0 0.75rem;
 }
 
-.scoreboard-list { max-height: 320px; overflow-y: auto; }
+.scoreboard-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0.5rem;
+}
 
 .scoreboard-row {
   display: flex;
@@ -264,7 +270,6 @@ html, body {
   padding: 0.6rem 1rem;
   border-radius: 10px;
   background: #14151a;
-  margin-bottom: 0.5rem;
   font-size: 1.3rem;
 }
 .scoreboard-row.active-row { border: 2px solid var(--accent); }

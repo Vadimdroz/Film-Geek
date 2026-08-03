@@ -621,6 +621,12 @@ function namesAreClose(a, b) {
   const nb = normalizeName(b);
   if (!na || !nb) return false;
   if (na === nb) return true;
+  // Everything below is a *fuzzy* comparison, which only means anything
+  // once there's enough signal to compare — a 1-2 character guess like
+  // "A" or "W" is trivially a "substring" of almost any longer name and
+  // would otherwise match nearly anything. Below this length, only an
+  // exact match (already checked above) counts.
+  if (Math.min(na.length, nb.length) < 3) return false;
   if (na.includes(nb) || nb.includes(na)) return true;
   const lastA = na.split(" ").pop();
   const lastB = nb.split(" ").pop();
