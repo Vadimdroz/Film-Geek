@@ -130,7 +130,18 @@ html, body {
   max-height: 100vh;
   overflow-y: auto;
   padding: 2rem;
+  /* Some browsers/OS settings always render a scrollbar track even when
+     nothing needs to scroll — on this dark, narrow-and-centered box that
+     shows up as a bright vertical seam against the black background on
+     either side. Theming it thin and dark keeps it functional (still
+     scrolls when content is actually taller than the screen) without it
+     reading as a rendering glitch. */
+  scrollbar-width: thin;
+  scrollbar-color: #333 transparent;
 }
+.cover-inner::-webkit-scrollbar { width: 6px; }
+.cover-inner::-webkit-scrollbar-track { background: transparent; }
+.cover-inner::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
 
 .logo {
   font-size: 1.6rem;
@@ -190,6 +201,49 @@ html, body {
   font-size: 1.15rem;
   line-height: 1.7;
   margin-bottom: 2rem;
+}
+
+/* One card per team that answered this round — every team can answer
+   independently now, so a round can have several results to show at once
+   instead of just one. */
+.team-result-card {
+  background: #14151a;
+  border-radius: 12px;
+  padding: 0.9rem 1.1rem;
+  margin-bottom: 0.75rem;
+  font-size: 1.05rem;
+  line-height: 1.6;
+}
+.team-result-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 700;
+  font-size: 1.2rem;
+  margin-bottom: 0.4rem;
+}
+.team-result-points { color: var(--accent); }
+
+/* Each field in a team's result card doubles as a host override toggle —
+   fuzzy name matching helps, but the host can always flip a call. */
+.field-toggle {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0.15rem 0;
+  font: inherit;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.field-toggle:hover { background: rgba(255, 255, 255, 0.06); }
+.field-toggle:active { background: rgba(255, 255, 255, 0.12); }
+
+.override-hint {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin: 0.4rem 0 0;
 }
 
 .scoreboard { margin-bottom: 2rem; text-align: left; }

@@ -21,6 +21,7 @@ import {
 const ROOM_KEY = "filmgeek_player_room";
 const TEAM_ID_KEY = "filmgeek_player_team_id";
 const NAME_KEY = "filmgeek_player_name";
+const GUESS_WINDOW_MS = 60000; // matches host/app.js — the local clock a team gets once it answers on audio alone
 
 const EMOJI_SET = ["🍿", "🎬", "🕶️", "🦖", "🐉", "👽", "🤖", "🧙", "🥷", "🦸", "🎭", "🍕", "🐒", "🚀", "💀", "👑", "🎩", "🔫"];
 
@@ -57,9 +58,9 @@ const els = {
   playerTimer: document.getElementById("player-timer"),
   movieInput: document.getElementById("movie-input"),
   movieCorrection: document.getElementById("movie-correction"),
-  directorInput: document.getElementById("director-input"),
-  directorCorrection: document.getElementById("director-correction"),
   yearInput: document.getElementById("year-input"),
+  actor1Input: document.getElementById("actor1-input"),
+  actor2Input: document.getElementById("actor2-input"),
   submitGuessBtn: document.getElementById("submit-guess-btn"),
 
   lockedSummary: document.getElementById("locked-summary"),
@@ -91,9 +92,9 @@ let selectedEmoji = null;
 let currentPhase = null;
 let lastSeenRoundIndex = -1;
 let myTeamGuessThisRound = null;
-let movieIndex = { titles: [], directors: [] };
-let teamsCache = {}; // teamId -> team data, for looking up whose turn it is
-let currentActiveTeamId = null;
+let myAudioChoiceThisRound = null; // null | "answer_now" | "go_to_video" — this team's own choice, independent of any other team's
+let movieIndex = { titles: [] };
+let lastRoomData = null; // cached so the guesses listener can re-derive the right screen without waiting for the next room update
 
 let unsubRoom = null;
 let unsubGuesses = null;
@@ -112,7 +113,7 @@ function escapeHtml(s) {
   return div.innerHTML;
 }
 
-// ---------- Fuzzy match (Levenshtein) for director typo-correction ----------
+// ---------- Fuzzy match (Levenshtein) for movie-title typo-correction ----------
 
 function levenshtein(a, b) {
   a = a.toLowerCase();
@@ -180,10 +181,10 @@ function renderEmojiGrid() {
 renderEmojiGrid();
 
 // ---------- Suggestions ----------
-// No live-as-you-type dropdown — suggestions only appear once the player
-// finishes typing and presses Enter (or submits), and only as a "Did you
-// mean X?" they must click to accept, never a silent auto-fill. This
-// applies the same way to both the movie title and director fields.
+// No live-as-you-type dropdown — a suggestion only appears once the
+// player finishes typing the movie title and presses Enter (or submits),
+// and only as a "Did you mean X?" they must click to accept, never a
+// silent auto-fill.
 
 function clearSuggestion(correctionEl) {
   correctionEl.hidden = true;
@@ -233,7 +234,6 @@ function setupSuggestionCheck(input, correctionEl, getCandidates) {
 
 function setupAutocompletes() {
   setupSuggestionCheck(els.movieInput, els.movieCorrection, () => movieIndex.titles);
-  setupSuggestionCheck(els.directorInput, els.directorCorrection, () => movieIndex.directors);
 }
 
 // ---------- Join ----------
@@ -319,7 +319,7 @@ els.joinBtn.addEventListener("click", async () => {
 
 async function loadMovieIndex() {
   const snap = await getDoc(doc(db, "rooms", roomCode, "public", "movieIndex"));
-  movieIndex = snap.exists() ? snap.data() : { titles: [], directors: [] };
+  movieIndex = snap.exists() ? snap.data() : { titles: [] };
   setupAutocompletes();
 }
 
@@ -337,7 +337,10 @@ function attachRoomListener() {
   if (unsubRoom) unsubRoom();
   unsubRoom = onSnapshot(doc(db, "rooms", roomCode), (snap) => {
     const data = snap.data();
-    if (data) handleRoomUpdate(data);
+    if (data) {
+      lastRoomData = data;
+      handleRoomUpdate(data);
+    }
   });
 }
 
@@ -345,11 +348,8 @@ function attachTeamsListener() {
   if (unsubTeams) unsubTeams();
   unsubTeams = onSnapshot(collection(db, "rooms", roomCode, "teams"), (snap) => {
     const teams = [];
-    teamsCache = {};
     snap.forEach((d) => {
-      const t = { id: d.id, ...d.data() };
-      teams.push(t);
-      teamsCache[d.id] = t;
+      teams.push({ id: d.id, ...d.data() });
     });
     teams.sort((a, b) => (b.score || 0) - (a.score || 0));
 
@@ -370,10 +370,10 @@ function attachRoundGuessListener(roundIndex) {
   if (unsubGuesses) unsubGuesses();
   myTeamGuessThisRound = null;
   els.movieInput.value = "";
-  els.directorInput.value = "";
   els.yearInput.value = "";
+  els.actor1Input.value = "";
+  els.actor2Input.value = "";
   clearSuggestion(els.movieCorrection);
-  clearSuggestion(els.directorCorrection);
 
   const ref = collection(db, "rooms", roomCode, "rounds", String(roundIndex), "guesses");
   unsubGuesses = onSnapshot(ref, (snap) => {
@@ -382,58 +382,59 @@ function attachRoundGuessListener(roundIndex) {
       const g = d.data();
       if (g.teamId === teamId) myTeamGuessThisRound = g;
     });
-    if (currentPhase === "guessing") renderGuessingOrLocked();
+    // Re-derive the screen from the latest room state whenever our own
+    // guess status changes — matters most right after we submit, so we
+    // flip to "locked" immediately instead of waiting on the next room
+    // update (which may not arrive until other teams finish too).
+    const relevantPhase = currentPhase === "audio" || currentPhase === "playing" || currentPhase === "guessing";
+    if (relevantPhase && lastRoomData) handleRoomUpdate(lastRoomData);
   });
-}
-
-function isMyTurn() {
-  return currentActiveTeamId && currentActiveTeamId === teamId;
-}
-
-function activeTeamLabel() {
-  const t = currentActiveTeamId && teamsCache[currentActiveTeamId];
-  return t ? `${t.emoji} ${t.name}` : "another team";
 }
 
 function handleRoomUpdate(data) {
   currentPhase = data.phase;
-  currentActiveTeamId = data.activeTeamId || null;
 
   if (data.roundIndex !== lastSeenRoundIndex) {
     lastSeenRoundIndex = data.roundIndex;
+    myAudioChoiceThisRound = null;
     attachRoundGuessListener(data.roundIndex);
   }
 
+  // A team that chose "answer now" runs its own independent guess clock
+  // from the moment they chose it, regardless of what the room's phase
+  // does next (video/guessing for whichever OTHER teams still need it) —
+  // until they submit, their screen doesn't follow the room at all. Once
+  // the round is actually over (revealed/lobby/trivia) this stops
+  // applying so they're never stuck looking at a stale guess form.
+  const midRound = data.phase === "audio" || data.phase === "playing" || data.phase === "guessing";
+  if (midRound && myAudioChoiceThisRound === "answer_now" && !myTeamGuessThisRound) {
+    return;
+  }
+
   if (data.phase === "audio") {
-    if (isMyTurn()) {
-      startCountdown(data.audioDeadline, els.audioPlayerTimer);
-      showScreen("audioChoice");
-    } else {
+    if (myTeamGuessThisRound) {
+      showLocked(myTeamGuessThisRound);
+    } else if (myAudioChoiceThisRound === "go_to_video") {
       stopCountdown();
       els.waitingTitle.textContent = "🔊 Listen up!";
-      els.waitingMessage.textContent = `${activeTeamLabel()} is hearing the audio — watch for what happens next.`;
+      els.waitingMessage.textContent = "Waiting for the video — get ready to answer once it ends.";
       showScreen("waiting");
+    } else {
+      startCountdown(data.audioDeadline, els.audioPlayerTimer);
+      showScreen("audioChoice");
     }
   } else if (data.phase === "playing") {
     stopCountdown();
-    if (isMyTurn()) {
-      els.waitingTitle.textContent = "🎬 Your turn!";
-      els.waitingMessage.textContent = "Watch the TV — get ready to answer once the clip ends.";
+    if (myTeamGuessThisRound) {
+      showLocked(myTeamGuessThisRound);
     } else {
       els.waitingTitle.textContent = "🎬 Watch the TV!";
-      els.waitingMessage.textContent = `It's ${activeTeamLabel()}'s turn to answer — you're just watching this round.`;
-    }
-    showScreen("waiting");
-  } else if (data.phase === "guessing") {
-    if (isMyTurn()) {
-      startCountdown(data.guessDeadline);
-      renderGuessingOrLocked();
-    } else {
-      stopCountdown();
-      els.waitingTitle.textContent = "⏳ Not your turn";
-      els.waitingMessage.textContent = `${activeTeamLabel()} is answering this round. Hang tight for the reveal!`;
+      els.waitingMessage.textContent = "Get ready to answer once the clip ends.";
       showScreen("waiting");
     }
+  } else if (data.phase === "guessing") {
+    startCountdown(data.guessDeadline);
+    renderGuessingOrLocked();
   } else if (data.phase === "revealed") {
     stopCountdown();
     renderRevealed(data.revealedAnswer);
@@ -455,27 +456,32 @@ function handleRoomUpdate(data) {
 }
 
 // ---------- Audio-only choice ----------
+// Every team decides independently — there's no turn order, and this
+// choice never depends on (or affects) what any other team does.
 
-els.answerNowBtn.addEventListener("click", () => submitAudioChoice("answer_now"));
-els.goToVideoBtn.addEventListener("click", () => submitAudioChoice("go_to_video"));
+els.answerNowBtn.addEventListener("click", chooseAudioOnly);
+els.goToVideoBtn.addEventListener("click", chooseWaitForVideo);
 
-async function submitAudioChoice(choice) {
-  els.answerNowBtn.disabled = true;
-  els.goToVideoBtn.disabled = true;
-  try {
-    await updateDoc(doc(db, "rooms", roomCode, "teams", teamId), {
-      audioChoice: choice,
-      audioChoiceRound: lastSeenRoundIndex,
-    });
-    // The host reacts to this on the team doc and changes the room's
-    // phase, which our own room listener will pick up and move us on —
-    // no need to switch screens manually here.
-  } catch (err) {
-    alert(`Couldn't send your choice: ${err.message}`);
-  } finally {
-    els.answerNowBtn.disabled = false;
-    els.goToVideoBtn.disabled = false;
-  }
+function chooseAudioOnly() {
+  myAudioChoiceThisRound = "answer_now";
+  startCountdown(Date.now() + GUESS_WINDOW_MS, els.playerTimer);
+  showScreen("guessing");
+  // Written to our own team doc purely so the host can show a live "N of
+  // M teams decided" tally — our screen has already moved on locally and
+  // doesn't wait on this write or on anything the host does.
+  updateDoc(doc(db, "rooms", roomCode, "teams", teamId), {
+    audioChoice: "answer_now",
+    audioChoiceRound: lastSeenRoundIndex,
+  }).catch((err) => console.error("Couldn't record audio choice", err));
+}
+
+function chooseWaitForVideo() {
+  myAudioChoiceThisRound = "go_to_video";
+  updateDoc(doc(db, "rooms", roomCode, "teams", teamId), {
+    audioChoice: "go_to_video",
+    audioChoiceRound: lastSeenRoundIndex,
+  }).catch((err) => console.error("Couldn't record audio choice", err));
+  if (lastRoomData) handleRoomUpdate(lastRoomData);
 }
 
 function renderGuessingOrLocked() {
@@ -488,7 +494,7 @@ function renderGuessingOrLocked() {
 
 function showLocked(guess) {
   showScreen("locked");
-  els.lockedSummary.innerHTML = `Movie: <strong>${escapeHtml(guess.movieGuess || "—")}</strong><br>Director: <strong>${escapeHtml(guess.directorGuess || "—")}</strong><br>Year: <strong>${escapeHtml(String(guess.yearGuess || "—"))}</strong>`;
+  els.lockedSummary.innerHTML = `Movie: <strong>${escapeHtml(guess.movieGuess || "—")}</strong><br>Year: <strong>${escapeHtml(String(guess.yearGuess || "—"))}</strong><br>Actor 1: <strong>${escapeHtml(guess.actor1Guess || "—")}</strong><br>Actor 2: <strong>${escapeHtml(guess.actor2Guess || "—")}</strong>`;
 }
 
 // ---------- Countdown ----------
@@ -515,13 +521,27 @@ function stopCountdown() {
 }
 
 // ---------- Submit guess ----------
+// Blank fields are allowed (they just score 0 for that field) — a team
+// that only knows the movie shouldn't be blocked from locking that in.
+// We just confirm once so a blank isn't an accidental empty tap.
 
 els.submitGuessBtn.addEventListener("click", async () => {
   const movieGuess = els.movieInput.value.trim();
-  const directorGuess = els.directorInput.value.trim();
   const yearGuess = els.yearInput.value.trim();
-  if (!movieGuess && !directorGuess && !yearGuess) {
+  const actor1Guess = els.actor1Input.value.trim();
+  const actor2Guess = els.actor2Input.value.trim();
+
+  if (!movieGuess && !yearGuess && !actor1Guess && !actor2Guess) {
     alert("Type at least something before locking in!");
+    return;
+  }
+
+  const blankFields = [];
+  if (!movieGuess) blankFields.push("Movie");
+  if (!yearGuess) blankFields.push("Year");
+  if (!actor1Guess) blankFields.push("Actor 1");
+  if (!actor2Guess) blankFields.push("Actor 2");
+  if (blankFields.length > 0 && !confirm(`No answer for ${blankFields.join(", ")} — submit anyway?`)) {
     return;
   }
 
@@ -531,8 +551,10 @@ els.submitGuessBtn.addEventListener("click", async () => {
     await setDoc(doc(db, "rooms", roomCode, "rounds", String(lastSeenRoundIndex), "guesses", myUid), {
       teamId,
       movieGuess,
-      directorGuess,
       yearGuess,
+      actor1Guess,
+      actor2Guess,
+      audioOnly: myAudioChoiceThisRound === "answer_now",
       submittedAt: serverTimestamp(),
     });
     // The round-guess listener will pick this up and flip to the locked
@@ -547,6 +569,39 @@ els.submitGuessBtn.addEventListener("click", async () => {
 
 // ---------- Reveal ----------
 
+// Matches host/app.js's own copy of this logic (see revealInFirestore /
+// namesAreClose there) — duplicated because each player renders its own
+// preview of the breakdown from the publicly revealed answer, but the
+// host's copy (plus its reveal-screen override) is what actually decides
+// points. Keep both in sync if this ever changes.
+function normalizeName(s) {
+  return (s || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function namesAreClose(a, b) {
+  const na = normalizeName(a);
+  const nb = normalizeName(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  if (na.includes(nb) || nb.includes(na)) return true;
+  const lastA = na.split(" ").pop();
+  const lastB = nb.split(" ").pop();
+  if (lastA.length > 2 && lastA === lastB) return true;
+  const threshold = Math.max(1, Math.round(Math.max(na.length, nb.length) * 0.25));
+  return levenshtein(na, nb) <= threshold;
+}
+
+function isActorMatch(guess, cast) {
+  if (!guess) return false;
+  return (cast || []).some((name) => namesAreClose(guess, name));
+}
+
 function renderRevealed(answer) {
   showScreen("revealed");
   if (!answer) return;
@@ -557,24 +612,24 @@ function renderRevealed(answer) {
   const guess = myTeamGuessThisRound;
   if (guess) {
     const movieOk = normalize(guess.movieGuess) === normalize(answer.movieTitle);
-    const directorOk = normalize(guess.directorGuess) === normalize(answer.director);
     const yearOk = String(guess.yearGuess || "").trim() === String(answer.year || "").trim();
+    const actor1Ok = isActorMatch(guess.actor1Guess, answer.cast);
+    const actor2Ok = isActorMatch(guess.actor2Guess, answer.cast);
     els.revealedBreakdown.innerHTML = `
-      <div class="${movieOk ? "result-correct" : "result-wrong"}">Movie: ${escapeHtml(guess.movieGuess || "—")} ${movieOk ? "✓" : "✗"}</div>
-      <div class="${directorOk ? "result-correct" : "result-wrong"}">Director: ${escapeHtml(guess.directorGuess || "—")} ${directorOk ? "✓" : "✗"}</div>
-      <div class="${yearOk ? "result-correct" : "result-wrong"}">Year: ${escapeHtml(String(guess.yearGuess || "—"))} ${yearOk ? "✓" : "✗"}</div>
+      <div class="${movieOk ? "result-correct" : "result-wrong"}">Movie: ${escapeHtml(guess.movieGuess || "—")} ${movieOk ? "✓" : "✗"} (3 pts)</div>
+      <div class="${yearOk ? "result-correct" : "result-wrong"}">Year: ${escapeHtml(String(guess.yearGuess || "—"))} ${yearOk ? "✓" : "✗"} (2 pts)</div>
+      <div class="${actor1Ok ? "result-correct" : "result-wrong"}">Actor 1: ${escapeHtml(guess.actor1Guess || "—")} ${actor1Ok ? "✓" : "✗"} (1 pt)</div>
+      <div class="${actor2Ok ? "result-correct" : "result-wrong"}">Actor 2: ${escapeHtml(guess.actor2Guess || "—")} ${actor2Ok ? "✓" : "✗"} (1 pt)</div>
     `;
-  } else if (isMyTurn()) {
-    els.revealedBreakdown.innerHTML = '<div class="hint">Your team didn\'t answer in time.</div>';
   } else {
-    els.revealedBreakdown.innerHTML = '<div class="hint">Not your team\'s turn this round.</div>';
+    els.revealedBreakdown.innerHTML = '<div class="hint">Your team didn\'t answer this round.</div>';
   }
 }
 
 // ---------- Bonus trivia ----------
-// Open to every team, not just whoever's turn the round was — first
-// correct submission (earliest per-team, same "collaborate then submit"
-// model as the main guess) wins the points.
+// Every team races to answer — first correct submission (earliest
+// per-team, same "collaborate then submit" model as the main guess) wins
+// the points.
 
 function attachTriviaAnswerListener(roundIndex) {
   if (unsubTriviaAnswer) unsubTriviaAnswer();
@@ -677,6 +732,8 @@ function leaveRoom() {
   teamEmoji = null;
   lastSeenRoundIndex = -1;
   myTeamGuessThisRound = null;
+  myAudioChoiceThisRound = null;
+  lastRoomData = null;
   currentPhase = null;
 
   els.topBar.hidden = true;

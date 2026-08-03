@@ -40,7 +40,6 @@ const els = {
   gameNameDisplay: document.getElementById("game-name-display"),
   playerCount: document.getElementById("player-count"),
   roundIndicator: document.getElementById("round-indicator"),
-  turnIndicator: document.getElementById("turn-indicator"),
 
   setupPanel: document.getElementById("setup-panel"),
   resumeBlock: document.getElementById("resume-block"),
@@ -62,7 +61,7 @@ const els = {
   importInput: document.getElementById("import-input"),
 
   audioPanel: document.getElementById("audio-panel"),
-  audioTurnLabel: document.getElementById("audio-turn-label"),
+  audioDecidedCount: document.getElementById("audio-decided-count"),
   audioTimer: document.getElementById("audio-timer"),
 
   endedPanel: document.getElementById("ended-panel"),
@@ -123,32 +122,39 @@ const PLAYER_ERROR_MESSAGES = {
 
 let roomCode = null;
 let currentRoundIndex = 0;
-let currentGuesses = {}; // uid -> { teamId, movieGuess, directorGuess, yearGuess, submittedAt }
+let currentGuesses = {}; // uid -> { teamId, movieGuess, yearGuess, actor1Guess, actor2Guess, submittedAt, audioOnly }
 let teamsMap = {}; // teamId -> { name, emoji, score, memberNames, createdAt }
-let activeTeamId = null; // whose turn it is this round
 let unsubscribeGuesses = null;
 let guessCountdownInterval = null;
 let autoRevealTimeout = null;
 let roundRevealed = false;
 
-let roundAudioOnly = false; // true if the active team answered before ever seeing video this round
-let audioChoiceHandled = false;
 let audioCountdownInterval = null;
 let audioTimeout = null;
 
-// Points scale up sharply with how many of the 3 fields (movie/director/
-// year) a team got right, rather than 1 point per field — rewards a full
-// correct guess much more than a partial one. Doubled if they answered
-// on audio alone, before ever seeing the video.
-const POINTS_BY_CORRECT_COUNT = { 0: 0, 1: 2, 2: 5, 3: 10 };
+// Points per field, summed rather than a flat per-field amount — movie
+// title is worth the most since it's the actual point of the game, year
+// is a solid guess-along bonus, and each named actor is a smaller assist.
+// Doubled if a team answered on audio alone, before ever seeing the video.
+const MOVIE_POINTS = 3;
+const YEAR_POINTS = 2;
+const ACTOR_POINTS = 1;
 const AUDIO_ONLY_MULTIPLIER = 2;
+const FIELD_POINTS = { movie: MOVIE_POINTS, year: YEAR_POINTS, actor1: ACTOR_POINTS, actor2: ACTOR_POINTS };
+const FIELD_LABELS = { movie: "Movie", year: "Year", actor1: "Actor 1", actor2: "Actor 2" };
+
+// The current round's scored rows, kept around (not just a local variable
+// in performReveal) so the host can tap a field on the reveal screen to
+// override the automatic judging call — fuzzy name matching helps, but a
+// human is still the best judge of "close enough."
+let currentRoundRows = [];
 
 // Bonus trivia: after some reveals, instead of going straight to the next
 // clip, a Kahoot-style multiple-choice question about the movie just
-// revealed pops up — open to every team (not just the one whose turn it
-// was), first correct answer wins. Only fires for clips that actually have
-// trivia authored in admin-tagging, and even then only some of the time so
-// it stays a surprise rather than a fixed extra step every round.
+// revealed pops up — every team races to answer, first correct one wins.
+// Only fires for clips that actually have trivia authored in
+// admin-tagging, and even then only some of the time so it stays a
+// surprise rather than a fixed extra step every round.
 const TRIVIA_CHANCE = 0.5;
 const TRIVIA_WINDOW_MS = 12000;
 const TRIVIA_POINTS = 5;
@@ -162,15 +168,6 @@ let triviaAnswers = {}; // uid -> { teamId, selectedIndex, submittedAt }
 let triviaCorrectIndex = null;
 let triviaOptions = [];
 let triviaRevealed = false;
-
-// Stable turn order: whoever's team doc was created earliest goes first.
-// Rotates through teams currently in the room — if a team joins mid-game
-// it's added to the rotation from its creation order, same as anyone else.
-function getTeamOrder() {
-  return Object.entries(teamsMap)
-    .sort((a, b) => (a[1].createdAt?.toMillis?.() ?? 0) - (b[1].createdAt?.toMillis?.() ?? 0))
-    .map(([id]) => id);
-}
 
 function generateRoomCode() {
   let code = "";
@@ -216,8 +213,8 @@ async function createRoom(gameName) {
 }
 
 // Shared by both a freshly-created room and a resumed one — subscribes to
-// the teams subcollection for the roster/score display and for picking up
-// the active team's audio-phase choice (see the comment inside).
+// the teams subcollection for the roster/score display and the live
+// "N of M teams decided" count shown during the audio phase.
 function subscribeToRoomTeams() {
   onSnapshot(collection(db, "rooms", roomCode, "teams"), (snap) => {
     teamsMap = {};
@@ -229,22 +226,22 @@ function subscribeToRoomTeams() {
         ? "0 teams joined"
         : `${teamCount} team${teamCount === 1 ? "" : "s"}, ${playerCount} player${playerCount === 1 ? "" : "s"} joined`;
 
-    // The active team can't write the room doc directly (only the host
-    // can), so they signal their audio-phase choice on their own team
-    // doc instead — which they're already allowed to write — and the
-    // host reacts to it here.
-    if (!audioChoiceHandled && activeTeamId && currentClip) {
-      const team = teamsMap[activeTeamId];
-      if (team && team.audioChoiceRound === currentRoundIndex && team.audioChoice) {
-        audioChoiceHandled = true;
-        if (team.audioChoice === "answer_now") {
-          skipToGuessing(currentClip);
-        } else if (team.audioChoice === "go_to_video") {
-          revealVideo(currentClip);
-        }
-      }
-    }
+    updateAudioDecidedCount();
   });
+}
+
+// Every team decides independently whether to answer on audio alone —
+// each team's choice lives on their own team doc (they're already allowed
+// to write it), so the host just tallies how many have decided so far.
+function countTeamsDecidedThisRound() {
+  return Object.values(teamsMap).filter((t) => t.audioChoiceRound === currentRoundIndex && t.audioChoice).length;
+}
+
+function updateAudioDecidedCount() {
+  if (els.audioPanel.hidden) return; // only relevant while the audio phase is showing
+  const total = Object.keys(teamsMap).length;
+  const decided = countTeamsDecidedThisRound();
+  els.audioDecidedCount.textContent = total ? `${decided} of ${total} team${total === 1 ? "" : "s"} decided` : "";
 }
 
 // Persists enough of the in-progress game (which clips are left/used, the
@@ -358,14 +355,13 @@ async function deleteRoomData(code, roundCount) {
 }
 
 // Players never see which clip is playing, but they do need to know what
-// movie titles/directors exist in the library to autocomplete/correct
-// against — that's safe to publish since it doesn't reveal THIS round's
-// answer, just the word bank.
+// movie titles exist in the library to autocomplete/correct against —
+// that's safe to publish since it doesn't reveal THIS round's answer,
+// just the word bank.
 async function publishMovieIndex() {
   if (!roomCode) return;
   const titles = [...new Set(clips.map((c) => c.movieTitle).filter(Boolean))].sort();
-  const directors = [...new Set(clips.map((c) => c.director).filter(Boolean))].sort();
-  await setDoc(doc(db, "rooms", roomCode, "public", "movieIndex"), { titles, directors }).catch((err) =>
+  await setDoc(doc(db, "rooms", roomCode, "public", "movieIndex"), { titles }).catch((err) =>
     console.error("publishMovieIndex failed", err)
   );
 }
@@ -375,13 +371,7 @@ async function startRoundInFirestore(clip) {
   try {
     currentRoundIndex += 1;
     roundRevealed = false;
-    roundAudioOnly = false;
-    audioChoiceHandled = false;
     updateRoundIndicator();
-
-    const teamOrder = getTeamOrder();
-    activeTeamId = teamOrder.length ? teamOrder[(currentRoundIndex - 1) % teamOrder.length] : null;
-    updateTurnIndicator();
 
     await setDoc(
       doc(db, "rooms", roomCode),
@@ -391,7 +381,7 @@ async function startRoundInFirestore(clip) {
         revealedAnswer: null,
         guessDeadline: null,
         audioDeadline: null,
-        activeTeamId,
+        activeTeamId: null, // no more turn rotation — kept null for old resumed-game docs that still have a stale value
       },
       { merge: true }
     );
@@ -422,6 +412,15 @@ function attachGuessListener(roundIndex) {
     snap.forEach((d) => (currentGuesses[d.id] = d.data()));
     const teamsAnswered = new Set(Object.values(currentGuesses).map((g) => g.teamId)).size;
     els.guessCount.textContent = teamsAnswered === 1 ? "1 team has answered" : `${teamsAnswered} teams have answered`;
+
+    // Every team can answer independently now (some during the audio
+    // phase, some after watching the clip) — this listener sees both, so
+    // once every currently-joined team has locked in an answer there's no
+    // reason to keep waiting on a timer or for the video to even play.
+    const totalTeams = Object.keys(teamsMap).length;
+    if (totalTeams > 0 && teamsAnswered >= totalTeams && !roundRevealed) {
+      performReveal();
+    }
   });
 }
 
@@ -481,40 +480,109 @@ function normalize(s) {
   return (s || "").trim().toLowerCase();
 }
 
+// ---------- Fuzzy name matching (actor guesses) ----------
+// A flat "off by more than 4 letters is wrong" rule is too strict for a
+// long name and too forgiving for a short one — this scales the allowed
+// edit distance to the name's length instead, plus a couple of shortcuts
+// (substring, last-name-only) that cover how people actually type a
+// half-remembered name. Still not perfect — see the host override below
+// (tap any field on the reveal screen) for whatever this misses.
+
+function normalizeName(s) {
+  return (s || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // strip accents (Renée -> Renee)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ") // punctuation/hyphens -> space
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function levenshtein(a, b) {
+  const m = a.length;
+  const n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+    }
+  }
+  return dp[m][n];
+}
+
+function namesAreClose(a, b) {
+  const na = normalizeName(a);
+  const nb = normalizeName(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  // "DiCaprio" vs "Leonardo DiCaprio" — guessing just part of the name.
+  if (na.includes(nb) || nb.includes(na)) return true;
+  // Surname-only comparison also catches spacing differences a straight
+  // substring check misses ("Deniro" vs "De Niro").
+  const lastA = na.split(" ").pop();
+  const lastB = nb.split(" ").pop();
+  if (lastA.length > 2 && lastA === lastB) return true;
+  // Fallback: typo tolerance that grows with the name's length — roughly
+  // one allowed slip per 4 characters, minimum 1.
+  const threshold = Math.max(1, Math.round(Math.max(na.length, nb.length) * 0.25));
+  return levenshtein(na, nb) <= threshold;
+}
+
+// A guessed actor counts if it's close to ANY name in the clip's cast
+// list — players name whoever they recognize, not a specific billing slot.
+function isActorMatch(guess, cast) {
+  if (!guess) return false;
+  return (cast || []).some((name) => namesAreClose(guess, name));
+}
+
 async function revealInFirestore(clip) {
   if (!roomCode) return { rows: [] };
   const rows = [];
   try {
-    // Only the active team's turn counts for scoring, even if a stray
-    // guess from another team somehow made it into Firestore — the
-    // player app already only shows the guess form to the active team,
-    // this is just belt-and-suspenders.
+    // Every team that submitted a guess this round scores — audio-only
+    // doubling is read per-team from their own guess doc (set when they
+    // submitted), not a single room-wide flag, since different teams can
+    // independently take either path in the same round.
     const byTeam = earliestGuessPerTeam();
-    const eligibleEntries = activeTeamId ? Object.entries(byTeam).filter(([teamId]) => teamId === activeTeamId) : [];
-    for (const [teamId, guess] of eligibleEntries) {
+    for (const [teamId, guess] of Object.entries(byTeam)) {
       const team = teamsMap[teamId] || { name: "Unknown team", emoji: "❓" };
       const movieOk = normalize(guess.movieGuess) === normalize(clip.movieTitle);
-      const directorOk = normalize(guess.directorGuess) === normalize(clip.director);
       const yearOk = String(guess.yearGuess || "").trim() === String(clip.year || "").trim();
-      const correctCount = (movieOk ? 1 : 0) + (directorOk ? 1 : 0) + (yearOk ? 1 : 0);
-      const points = POINTS_BY_CORRECT_COUNT[correctCount] * (roundAudioOnly ? AUDIO_ONLY_MULTIPLIER : 1);
+      const actor1Ok = isActorMatch(guess.actor1Guess, clip.cast);
+      // The same name typed into both slots (even a close variant of it)
+      // only scores once.
+      const actor2Ok = isActorMatch(guess.actor2Guess, clip.cast) && !namesAreClose(guess.actor2Guess, guess.actor1Guess);
+
+      const points =
+        (movieOk ? MOVIE_POINTS : 0) +
+        (yearOk ? YEAR_POINTS : 0) +
+        (actor1Ok ? ACTOR_POINTS : 0) +
+        (actor2Ok ? ACTOR_POINTS : 0);
+      const totalPoints = points * (guess.audioOnly ? AUDIO_ONLY_MULTIPLIER : 1);
 
       rows.push({
         teamId,
         name: team.name,
         emoji: team.emoji,
         movieGuess: guess.movieGuess,
-        directorGuess: guess.directorGuess,
         yearGuess: guess.yearGuess,
+        actor1Guess: guess.actor1Guess,
+        actor2Guess: guess.actor2Guess,
         movieOk,
-        directorOk,
         yearOk,
-        points,
-        newTotal: (team.score || 0) + points,
+        actor1Ok,
+        actor2Ok,
+        audioOnly: !!guess.audioOnly,
+        points: totalPoints,
+        newTotal: (team.score || 0) + totalPoints,
       });
 
-      if (points > 0) {
-        await updateDoc(doc(db, "rooms", roomCode, "teams", teamId), { score: increment(points) }).catch(() => {});
+      if (totalPoints > 0) {
+        await updateDoc(doc(db, "rooms", roomCode, "teams", teamId), { score: increment(totalPoints) }).catch(
+          () => {}
+        );
       }
     }
     rows.sort((a, b) => b.points - a.points);
@@ -676,7 +744,7 @@ async function performTriviaReveal() {
     els.triviaResultBanner.className = "round-result-banner lose";
     els.triviaResultBanner.textContent = "Nobody got it right this time.";
   }
-  renderScoreboard(winner, els.triviaScoreboardList);
+  renderScoreboard(winner ? [winner] : [], els.triviaScoreboardList);
   showPanel("trivia-result");
 }
 
@@ -772,11 +840,6 @@ function showResumeChoice(resumable) {
   showPanel("setup");
 }
 
-function updateTurnIndicator() {
-  const team = activeTeamId ? teamsMap[activeTeamId] : null;
-  els.turnIndicator.textContent = team ? `${team.emoji} ${team.name}'s turn!` : "";
-}
-
 function updateRoundIndicator() {
   const roundNumber = Math.min(currentRoundIndex + 1, clips.length);
   els.roundIndicator.textContent = clips.length ? `Round ${roundNumber} of ${clips.length}` : "";
@@ -847,7 +910,7 @@ function handlePlayerError(code) {
     endWatcher = null;
   }
   stopAudioPhaseTimers(); // in case the error happened during the audio-only phase
-  audioChoiceHandled = true; // don't let a queued auto-continue fire after we've already shown an error
+  roundRevealed = true; // don't let a queued auto-continue/auto-reveal fire after we've already shown an error
   els.hud.hidden = true;
   els.errorMessage.textContent =
     PLAYER_ERROR_MESSAGES[code] || `Player error (code ${code}) — this clip may need re-tagging.`;
@@ -868,17 +931,17 @@ els.errorSkipBtn.addEventListener("click", async () => {
 // same play-through covers YouTube's brief start-of-video title/info
 // overlay, so by the time video is revealed (always at least
 // AUDIO_ONLY_WINDOW_MS in) that overlay has long since disappeared and
-// there's no need for a separate reveal buffer. The active team's phone
-// offers "Answer now" (double
-// points, skips straight to guessing) or "Go to video" (normal points);
-// this auto-continues to video if neither is chosen in time.
+// there's no need for a separate reveal buffer. Every team decides for
+// itself, independently, whether to answer now (double points, on their
+// own phone, whenever they're ready) or wait for the video — there's no
+// turn order, and one team's choice never cuts another team's window
+// short. If a team hasn't decided by the time this phase ends, the video
+// just reveals for the room and they answer after watching it instead.
 function startAudioPhase(clip) {
   currentClip = clip;
-  roundAudioOnly = false;
-  audioChoiceHandled = false;
   els.hud.hidden = true;
   showPanel("audio");
-  els.audioTurnLabel.textContent = activeTeamId && teamsMap[activeTeamId] ? teamsMap[activeTeamId].name : "the team";
+  updateAudioDecidedCount();
   els.audioTimer.textContent = Math.round(AUDIO_ONLY_WINDOW_MS / 1000);
 
   ytPlayer.loadVideoById({ videoId: clip.youtubeId, startSeconds: clip.startSec });
@@ -903,10 +966,10 @@ function startAudioPhase(clip) {
 
   if (audioTimeout) clearTimeout(audioTimeout);
   audioTimeout = setTimeout(() => {
-    if (!audioChoiceHandled) {
-      audioChoiceHandled = true;
-      revealVideo(clip);
-    }
+    // If every team already answered during the audio window, the guess
+    // listener's auto-reveal (see attachGuessListener) has already fired
+    // and set roundRevealed — nothing left to do, the video isn't needed.
+    if (!roundRevealed) revealVideo(clip);
   }, AUDIO_ONLY_WINDOW_MS);
 }
 
@@ -921,13 +984,14 @@ function stopAudioPhaseTimers() {
   }
 }
 
-// The active team chose (or timed out into) seeing the video — it's
-// already been playing (audio-only, hidden behind the cover) since
-// startAudioPhase, so this just reveals what's already running in place
-// rather than reloading/restarting it from the top.
+// The audio window ran out with at least one team still needing the
+// video — it's already been playing (audio-only, hidden behind the
+// cover) since startAudioPhase, so this just reveals what's already
+// running in place rather than reloading/restarting it from the top.
+// Teams that already locked in an audio-only guess are unaffected —
+// their player screen shows "locked" regardless of what plays on the TV.
 function revealVideo(clip) {
   stopAudioPhaseTimers();
-  roundAudioOnly = false;
   currentClip = clip;
 
   if (roomCode) {
@@ -948,19 +1012,6 @@ function revealVideo(clip) {
       finishClip();
     }
   }, 150);
-}
-
-// The active team chose to answer on audio alone, before ever seeing the
-// video — skip straight to the guessing window, doubled scoring applies.
-function skipToGuessing(clip) {
-  stopAudioPhaseTimers();
-  roundAudioOnly = true;
-  currentClip = clip;
-  ytPlayer.pauseVideo();
-  els.hud.hidden = true;
-  showPanel("ended");
-  els.guessTimer.textContent = "60";
-  startGuessWindow();
 }
 
 function finishClip() {
@@ -1064,45 +1115,100 @@ async function performReveal() {
   els.answerMeta.innerHTML = parts.join("<br>");
 
   const { rows } = await revealInFirestore(c);
-  const activeRow = rows[0]; // at most one row now: only the active team's turn counts
+  currentRoundRows = rows;
 
-  if (activeRow) {
-    const activeTeam = teamsMap[activeRow.teamId] || {};
-    els.roundResultBanner.className = `round-result-banner ${activeRow.points > 0 ? "win" : "lose"}`;
-    const audioBonusNote = roundAudioOnly ? " 🎧 audio-only bonus!" : "";
-    els.roundResultBanner.textContent =
-      activeRow.points > 0
-        ? `${activeTeam.emoji || ""} ${activeRow.name} scored +${activeRow.points} points!${audioBonusNote}`
-        : `${activeTeam.emoji || ""} ${activeRow.name} scored 0 points this round.`;
-    els.roundBreakdown.innerHTML = `
-      <span class="${activeRow.movieOk ? "result-correct" : "result-wrong"}">Movie: ${escapeHtml(activeRow.movieGuess || "—")} ${activeRow.movieOk ? "✓" : "✗"}</span><br>
-      <span class="${activeRow.directorOk ? "result-correct" : "result-wrong"}">Director: ${escapeHtml(activeRow.directorGuess || "—")} ${activeRow.directorOk ? "✓" : "✗"}</span><br>
-      <span class="${activeRow.yearOk ? "result-correct" : "result-wrong"}">Year: ${escapeHtml(String(activeRow.yearGuess || "—"))} ${activeRow.yearOk ? "✓" : "✗"}</span>
-    `;
-  } else {
+  if (rows.length === 0) {
     els.roundResultBanner.className = "round-result-banner lose";
     els.roundResultBanner.textContent = "No team answered this round.";
     els.roundBreakdown.innerHTML = "";
+  } else {
+    renderRoundResultBanner();
+    els.roundBreakdown.innerHTML = rows.map(renderTeamResultCard).join("");
   }
 
-  renderScoreboard(activeRow);
+  renderScoreboard(rows);
   showPanel("answer");
 }
 
-function renderScoreboard(activeRow, targetEl = els.scoreboardList) {
-  const standings = Object.entries(teamsMap).map(([id, team]) => ({
-    id,
-    name: team.name,
-    emoji: team.emoji,
-    score: activeRow && activeRow.teamId === id ? activeRow.newTotal : team.score || 0,
-  }));
+function renderRoundResultBanner() {
+  const totalPoints = currentRoundRows.reduce((sum, r) => sum + r.points, 0);
+  els.roundResultBanner.className = `round-result-banner ${totalPoints > 0 ? "win" : "lose"}`;
+  els.roundResultBanner.textContent = totalPoints > 0 ? "Results are in!" : "Nobody scored this round.";
+}
+
+function renderTeamResultCard(row) {
+  const audioNote = row.audioOnly ? " 🎧" : "";
+  const field = (key, guessValue) => {
+    const ok = row[`${key}Ok`];
+    return `<button type="button" class="field-toggle ${ok ? "result-correct" : "result-wrong"}" data-team="${row.teamId}" data-field="${key}">${FIELD_LABELS[key]}: ${escapeHtml(guessValue || "—")} ${ok ? "✓" : "✗"}</button>`;
+  };
+  return `
+    <div class="team-result-card">
+      <div class="team-result-header">
+        <span>${row.emoji || ""} ${escapeHtml(row.name)}${audioNote}</span>
+        <span class="team-result-points">${row.points > 0 ? `+${row.points}` : "0"}</span>
+      </div>
+      ${field("movie", row.movieGuess)}
+      ${field("year", String(row.yearGuess || ""))}
+      ${field("actor1", row.actor1Guess)}
+      ${field("actor2", row.actor2Guess)}
+      <p class="override-hint">Tap an answer to correct the call if the judging got it wrong.</p>
+    </div>
+  `;
+}
+
+// Host override — fuzzy matching helps, but a human is still the best
+// judge of "close enough," so any field can be flipped after the fact.
+// Applies a score delta directly (points already committed to Firestore
+// at reveal) rather than recomputing everything from scratch.
+function toggleFieldCorrectness(teamId, field) {
+  const row = currentRoundRows.find((r) => r.teamId === teamId);
+  if (!row) return;
+
+  const key = `${field}Ok`;
+  const wasOk = !!row[key];
+  row[key] = !wasOk;
+
+  const delta = FIELD_POINTS[field] * (wasOk ? -1 : 1) * (row.audioOnly ? AUDIO_ONLY_MULTIPLIER : 1);
+  row.points += delta;
+  row.newTotal += delta;
+
+  if (roomCode && delta !== 0) {
+    updateDoc(doc(db, "rooms", roomCode, "teams", teamId), { score: increment(delta) }).catch((err) =>
+      console.error("Host override score update failed", err)
+    );
+  }
+
+  renderRoundResultBanner();
+  els.roundBreakdown.innerHTML = currentRoundRows.map(renderTeamResultCard).join("");
+  renderScoreboard(currentRoundRows);
+}
+
+els.roundBreakdown.addEventListener("click", (e) => {
+  const btn = e.target.closest(".field-toggle");
+  if (!btn) return;
+  toggleFieldCorrectness(btn.dataset.team, btn.dataset.field);
+});
+
+function renderScoreboard(scoringRows, targetEl = els.scoreboardList) {
+  const rowsByTeam = new Map((scoringRows || []).map((r) => [r.teamId, r]));
+  const standings = Object.entries(teamsMap).map(([id, team]) => {
+    const row = rowsByTeam.get(id);
+    return {
+      id,
+      name: team.name,
+      emoji: team.emoji,
+      score: row ? row.newTotal : team.score || 0,
+      scoredThisRound: !!row && row.points > 0,
+    };
+  });
   standings.sort((a, b) => b.score - a.score);
 
   targetEl.innerHTML = standings.length
     ? standings
         .map(
           (t) =>
-            `<div class="scoreboard-row${activeRow && t.id === activeRow.teamId ? " active-row" : ""}"><span class="sb-name">${t.emoji} ${escapeHtml(t.name)}</span><span class="sb-score">${t.score}</span></div>`
+            `<div class="scoreboard-row${t.scoredThisRound ? " active-row" : ""}"><span class="sb-name">${t.emoji} ${escapeHtml(t.name)}</span><span class="sb-score">${t.score}</span></div>`
         )
         .join("")
     : '<div class="hint">No teams have joined yet.</div>';

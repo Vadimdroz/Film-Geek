@@ -55,9 +55,14 @@ service cloud.firestore {
         allow delete: if isHost(roomCode);
       }
 
+      // create AND update (not just create) — a resubmission (accidental
+      // double-tap on "Lock in answer", or confirming a blank-field
+      // prompt after an already-landed write) would otherwise hit
+      // permission-denied the moment Firestore sees the doc already
+      // exists and treats the second write as an update.
       match /rounds/{roundIndex}/guesses/{uid} {
         allow read: if isHost(roomCode) || (isSignedIn() && request.auth.uid == uid);
-        allow create: if isSignedIn() && request.auth.uid == uid;
+        allow create, update: if isSignedIn() && request.auth.uid == uid;
         allow delete: if isHost(roomCode);
       }
 
@@ -66,7 +71,7 @@ service cloud.firestore {
       // round index a guess round already used.
       match /rounds/{roundIndex}/trivia/{uid} {
         allow read: if isHost(roomCode) || (isSignedIn() && request.auth.uid == uid);
-        allow create: if isSignedIn() && request.auth.uid == uid;
+        allow create, update: if isSignedIn() && request.auth.uid == uid;
         allow delete: if isHost(roomCode);
       }
     }

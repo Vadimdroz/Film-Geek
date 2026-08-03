@@ -52,17 +52,19 @@
 
   <section id="guessing-screen" class="screen" hidden>
     <p class="timer-display"><span id="player-timer">60</span>s left</p>
-    <label>Movie title
+    <label>Movie title <span class="hint">(3 pts)</span>
       <input id="movie-input" autocomplete="off" placeholder="Type it, then press Enter" />
       <p id="movie-correction" class="hint" hidden></p>
     </label>
-    <label>Director
-      <input id="director-input" autocomplete="off" placeholder="Type it, then press Enter" />
-      <p id="director-correction" class="hint" hidden></p>
-    </label>
-    <label>Year
+    <label>Year <span class="hint">(2 pts)</span>
       <input id="year-input" type="number" inputmode="numeric" placeholder="" maxlength="4" />
       <span class="hint">4 digits</span>
+    </label>
+    <label>Actor 1 <span class="hint">(1 pt)</span>
+      <input id="actor1-input" autocomplete="off" placeholder="Anyone in the cast" />
+    </label>
+    <label>Actor 2 <span class="hint">(1 pt)</span>
+      <input id="actor2-input" autocomplete="off" placeholder="Anyone in the cast" />
     </label>
     <button id="submit-guess-btn" class="giant-btn">Lock in answer</button>
   </section>
