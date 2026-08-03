@@ -20,4 +20,4 @@ Early planning/scaffolding stage. See [`docs/PLANNING.md`](docs/PLANNING.md) for
 
 ## Stack
 
-Vanilla JS/PWA, Firebase (Firestore + realtime sync), Cloudflare Pages hosting, TMDb API for movie metadata lookups.
+Vanilla JS/PWA, Firebase (Firestore + realtime sync), GitHub Pages hosting, TMDb API for movie metadata lookups.

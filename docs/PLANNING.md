@@ -13,7 +13,7 @@
 
 4. **Hiding the answer is a real engineering problem.** A raw YouTube embed leaks the title, channel name, suggested videos, and URL. Needs deliberate handling: custom play/pause overlay, disabled controls/related videos/annotations (`controls=0`, `rel=0`, `iv_load_policy=3`), tight start/end trimming, a cover screen for the first-frame flash. Deliberately *not* using the `youtube-nocookie.com` embed domain — it's a nice privacy touch but its cross-origin handshake with the parent page can get silently blocked by ad-blockers/privacy settings, leaving the player's `onReady` event never firing at all.
 
-5. **One GitHub repo, hosted, versioned from day one.** Cloudflare Pages for hosting, Firebase for data/sync, tagged releases as checkpoints.
+5. **One GitHub repo, hosted, versioned from day one.** GitHub Pages for hosting, Firebase for data/sync, tagged releases as checkpoints.
 
 ## Deep dive
 
@@ -48,12 +48,13 @@
 - Typo tolerance: movie title has a live "did you mean" suggestion against the tagged library (Levenshtein). Actor names are judged with a more generous fuzzy match (length-scaled Levenshtein, substring, last-name-only) plus a host override at reveal — see the "Flexible actor-name matching" note near the end of this doc.
 
 ### G. Tech stack
-- Vanilla JS/PWA + Firebase (Firestore + realtime sync) + Cloudflare Pages — consistent with prior projects, no new backend infra.
+- Vanilla JS/PWA + Firebase (Firestore + realtime sync) + GitHub Pages — consistent with prior projects, no new backend infra.
 
 ### H. Repo & workflow
 - Structure: `/host`, `/player`, `/admin-tagging`, `/data`, `/docs`.
-- `main` deploys to Cloudflare Pages; feature branches for bigger changes; tag a release each time the game is playable end-to-end.
+- `main` deploys via **GitHub Pages** (`vadimdroz.github.io/Film-Geek/`, source: branch `main`, path `/`) — not Cloudflare Pages, despite earlier drafts of this doc saying otherwise. No build step; a push to `main` triggers a GitHub Pages build automatically, usually live within a couple of minutes. Verify with `gh api /repos/Vadimdroz/Film-Geek/pages/builds/latest` (checks the `commit` field against `git rev-parse HEAD`) if it's ever unclear whether a deploy landed.
 - Secrets (Firebase config, TMDb API key) via environment variables, never committed.
+- **Cache-busting:** `host/`, `player/`, and `admin-tagging/` each load `app.js` and `style.css` with a `?v=YYYYMMDD` query string (see each `index.html`). GitHub Pages serves these with `cache-control: max-age=600` and no other invalidation, and mobile browsers (especially an "Add to Home Screen" PWA) can hold onto a cached copy well past that — bump the `?v=` date in all three `index.html` files whenever `app.js` or `style.css` changes, or a deployed fix may not actually reach a phone that already has the page loaded/bookmarked. (First hit 2026-08-03: a player's phone showed pre-rewrite waiting-screen text minutes after a deploy that no longer contained that text at all — confirmed via `curl` that the live file was correct; the phone's own cache was stale.)
 
 ### I. Suggested build order (MVP milestones)
 1. ✅ Manual tagging tool + hand-picked clips (localStorage for now, Firestore sync is a later nice-to-have).

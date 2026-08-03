@@ -101,6 +101,7 @@ let unsubTeams = null;
 let unsubTriviaAnswer = null;
 let myTriviaAnswer = null;
 let countdownInterval = null;
+let buzzInWatchdog = null;
 
 function normalize(s) {
   return (s || "").trim().toLowerCase();
@@ -262,6 +263,13 @@ els.joinBtn.addEventListener("click", async () => {
 
   els.joinBtn.disabled = true;
   els.joinBtn.textContent = "Joining…";
+  // Nothing below here had a timeout — a stalled sign-in or Firestore
+  // call would leave the button on "Joining…" forever with zero
+  // feedback. This at least tells the team something's wrong instead of
+  // silence, even though it can't fix a bad connection for them.
+  const slowJoinNotice = setTimeout(() => {
+    els.joinBtn.textContent = "Still working — check your connection…";
+  }, 8000);
   try {
     const user = await authReady;
     myUid = user.uid;
@@ -311,6 +319,7 @@ els.joinBtn.addEventListener("click", async () => {
   } catch (err) {
     showJoinError(`Couldn't join: ${err.message}`);
   } finally {
+    clearTimeout(slowJoinNotice);
     els.joinBtn.disabled = false;
     els.joinBtn.textContent = "Join";
   }
@@ -402,11 +411,19 @@ function handleRoomUpdate(data) {
   }
 
   if (data.phase === "audio") {
+    if (buzzInWatchdog) {
+      clearTimeout(buzzInWatchdog);
+      buzzInWatchdog = null;
+    }
     startCountdown(data.audioDeadline, els.audioPlayerTimer);
     els.answerNowBtn.disabled = false;
     els.answerNowBtn.textContent = ANSWER_NOW_DEFAULT_LABEL;
     showScreen("audioChoice");
   } else if (data.phase === "audio-claimed") {
+    if (buzzInWatchdog) {
+      clearTimeout(buzzInWatchdog);
+      buzzInWatchdog = null;
+    }
     stopCountdown();
     if (data.audioClaimedTeamId === teamId) {
       if (myTeamGuessThisRound) {
@@ -475,6 +492,16 @@ async function buzzIn() {
     // updates the room's phase to "audio-claimed" — our own screen only
     // moves on once that comes back through handleRoomUpdate, so a team
     // that buzzed a beat too late doesn't get stuck thinking it's their turn.
+    // If that confirmation never arrives (host lost connection, stuck on
+    // a stale tab, etc.), don't leave the button disabled forever with no
+    // explanation — let the team know and give them a way to retry.
+    if (buzzInWatchdog) clearTimeout(buzzInWatchdog);
+    buzzInWatchdog = setTimeout(() => {
+      if (currentPhase === "audio") {
+        els.answerNowBtn.disabled = false;
+        els.answerNowBtn.textContent = "Still waiting on the host — tap to try again";
+      }
+    }, 10000);
   } catch (err) {
     alert(`Couldn't buzz in: ${err.message}`);
     els.answerNowBtn.disabled = false;
@@ -717,6 +744,10 @@ function leaveRoom() {
   if (unsubTriviaAnswer) {
     unsubTriviaAnswer();
     unsubTriviaAnswer = null;
+  }
+  if (buzzInWatchdog) {
+    clearTimeout(buzzInWatchdog);
+    buzzInWatchdog = null;
   }
   stopCountdown();
 
