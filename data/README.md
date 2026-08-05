@@ -15,6 +15,9 @@ Clip and game data lives in Firebase (Firestore), not in this repo. This folder 
   "cast": ["string"],
   "genre": "string",
   "difficulty": "easy | medium | hard",
-  "notes": "string"
+  "notes": "string",
+  "excluded": false
 }
 ```
+
+`excluded` — when `true`, the host app leaves this clip out of every game's shuffle. Toggled from the clip library table in `/admin-tagging`, e.g. to retire clips a group has already seen.

@@ -878,6 +878,9 @@ async function loadLibrary() {
     console.error("Cloud clip fetch failed, falling back to local cache", err);
     clips = loadClipsFromLocalStorage();
   }
+  // Clips flagged excluded (e.g. a group has already seen them) stay in the
+  // library and its localStorage mirror, they just never get queued.
+  clips = clips.filter((c) => !c.excluded);
   clipsById = Object.fromEntries(clips.map((c) => [c.id, c]));
 }
 

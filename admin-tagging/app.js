@@ -484,6 +484,7 @@ els.saveClipBtn.addEventListener("click", async () => {
     notes: els.movieNotes.value.trim(),
     trivia: pendingTrivia,
     embeddable: currentEmbeddable,
+    excluded: editingClipId ? clips.find((c) => c.id === editingClipId)?.excluded || false : false,
     addedAt: editingClipId ? clips.find((c) => c.id === editingClipId)?.addedAt || new Date().toISOString() : new Date().toISOString(),
   };
 
@@ -545,6 +546,16 @@ function renderTable() {
     embedTd.className = clip.embeddable ? "badge-yes" : "badge-no";
     tr.appendChild(embedTd);
 
+    const includeTd = document.createElement("td");
+    const includeCheckbox = document.createElement("input");
+    includeCheckbox.type = "checkbox";
+    includeCheckbox.checked = !clip.excluded;
+    includeCheckbox.title = "Uncheck to leave this clip out of future games";
+    includeCheckbox.addEventListener("change", () => setClipExcluded(clip, !includeCheckbox.checked));
+    includeTd.appendChild(includeCheckbox);
+    tr.appendChild(includeTd);
+    if (clip.excluded) tr.classList.add("excluded-row");
+
     const actionsTd = document.createElement("td");
     actionsTd.className = "actions";
     const editBtn = document.createElement("button");
@@ -589,6 +600,17 @@ function loadClipIntoForm(clip) {
   els.cancelEditBtn.hidden = false;
   openPlayerFor(clip.youtubeId); // also syncs metadata-title-display from movieTitle
   window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+// Toggled straight from the table so excluding a clip a group has already
+// seen doesn't require opening the full edit form.
+async function setClipExcluded(clip, excluded) {
+  try {
+    await setDoc(doc(db, "clipLibrary", clip.id), { excluded }, { merge: true });
+  } catch (err) {
+    alert(`Couldn't update: ${err.message}`);
+    renderTable(); // revert the checkbox to match the last known-good state
+  }
 }
 
 async function deleteClip(clip) {

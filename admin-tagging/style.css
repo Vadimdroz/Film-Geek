@@ -192,3 +192,4 @@ td.actions { white-space: nowrap; }
 td.actions button { padding: 0.3rem 0.5rem; font-size: 0.8rem; }
 .badge-yes { color: var(--ok); }
 .badge-no { color: var(--bad); }
+tr.excluded-row { opacity: 0.5; }
