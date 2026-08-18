@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Film-Geek — Test Hub</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect x=%224%22 y=%224%22 width=%2292%22 height=%2292%22 rx=%2218%22 fill=%22%230a0a0c%22 stroke=%22%23e0a92b%22 stroke-width=%226%22/><text x=%2250%22 y=%2263%22 font-size=%2252%22 text-anchor=%22middle%22>🧪</text></svg>" />
+<link rel="stylesheet" href="style.css?v=20260818-1" />
+</head>
+<body>
+
+<header>
+  <h1>🧪 Film-Geek Test Hub</h1>
+  <p class="hint">Dev-only tool for playtesting new functionality against a fixed room code. Writes to the same live Firebase project as real games — everything here is scoped to room <strong>TEST</strong> only.</p>
+</header>
+
+<main>
+  <section class="card">
+    <h2>1. Seed the test room</h2>
+    <p class="hint">Creates room <strong>TEST</strong> using your real tagged clips, plus two fake teams (score reset to 0 each time). Re-run any time to reset for a fresh test.</p>
+    <button id="seed-btn" class="giant-btn">🌱 Seed test room</button>
+    <p id="seed-status" class="status-text"></p>
+  </section>
+
+  <section class="card">
+    <h2>2. Open test windows</h2>
+    <p class="hint">
+      Open the host link in a normal tab — same browser profile, so it auto-resumes room TEST.
+      Open each team link in its <strong>own incognito/private window</strong>, not just another tab:
+      regular tabs of the same browser share one anonymous identity, so two "teams" in regular tabs would collide.
+    </p>
+
+    <div class="link-row">
+      <div class="link-info">
+        <span class="link-label">▶ Host</span>
+        <span class="link-sub">Regular browser tab</span>
+      </div>
+      <a class="link-btn-primary" href="../host/" target="_blank" rel="noopener">Open host</a>
+    </div>
+
+    <div class="link-row">
+      <div class="link-info">
+        <span class="link-label">🍿 Join as Team A</span>
+        <span class="link-sub">Open in an incognito window</span>
+      </div>
+      <a class="link-btn-primary" id="team-a-link" href="#" target="_blank" rel="noopener">Open</a>
+      <button class="copy-btn" data-target="team-a-link" type="button">📋 Copy</button>
+    </div>
+
+    <div class="link-row">
+      <div class="link-info">
+        <span class="link-label">🎬 Join as Team B</span>
+        <span class="link-sub">Open in a second incognito window</span>
+      </div>
+      <a class="link-btn-primary" id="team-b-link" href="#" target="_blank" rel="noopener">Open</a>
+      <button class="copy-btn" data-target="team-b-link" type="button">📋 Copy</button>
+    </div>
+
+    <div class="link-row">
+      <div class="link-info">
+        <span class="link-label">🏷️ Tag clips</span>
+        <span class="link-sub">Only needed if step 1 warned your library is empty</span>
+      </div>
+      <a class="link-btn-primary" href="../admin-tagging/" target="_blank" rel="noopener">Open</a>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>3. Live status</h2>
+    <p id="status-empty" class="hint">Not seeded yet.</p>
+    <div id="status-block" hidden>
+      <p><strong>Phase:</strong> <span id="status-phase">—</span> · <strong>Round:</strong> <span id="status-round">—</span></p>
+      <div id="status-teams" class="status-teams"></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>4. Reset</h2>
+    <p class="hint">Deletes room TEST's data (teams, rounds, scores) so the next seed starts clean. Never touches real game rooms.</p>
+    <button id="reset-btn" class="giant-btn danger">🧹 Finish test game &amp; clear TEST data</button>
+    <p id="reset-status" class="status-text"></p>
+  </section>
+</main>
+
+<script type="module" src="app.js?v=20260818-1"></script>
+</body>
+</html>

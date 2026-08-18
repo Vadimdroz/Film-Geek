@@ -1,0 +1,135 @@
+:root {
+  --bg: #0a0a0c;
+  --fg: #f5f5f5;
+  --muted: #9a9a9a;
+  --accent: #d64545;
+  --test-accent: #e0a92b;
+  --card-bg: #14151a;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+header {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem 0.5rem;
+}
+
+header h1 {
+  margin: 0 0 0.5rem;
+  font-size: 1.6rem;
+  border-left: 4px solid var(--test-accent);
+  padding-left: 0.7rem;
+}
+
+main {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 1rem 1.5rem 3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.card {
+  background: var(--card-bg);
+  border-radius: 14px;
+  padding: 1.25rem 1.5rem;
+  border: 1px solid rgba(224, 169, 43, 0.15);
+}
+
+.card h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
+}
+
+.hint { color: var(--muted); font-size: 0.95rem; line-height: 1.5; }
+
+.giant-btn {
+  font-size: 1.1rem;
+  font-weight: 700;
+  padding: 0.75rem 1.5rem;
+  border-radius: 10px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  margin-top: 0.5rem;
+}
+.giant-btn:hover { filter: brightness(1.1); }
+.giant-btn:disabled { background: #3a3a3f; color: var(--muted); cursor: default; }
+.giant-btn.danger { background: #7a2323; }
+
+.status-text {
+  margin: 0.75rem 0 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+  white-space: pre-line;
+}
+.status-text.ok { color: #6cc785; }
+.status-text.warn { color: #e0a92b; }
+.status-text.error { color: #ff8a80; }
+
+.link-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  flex-wrap: wrap;
+}
+.link-row:first-of-type { border-top: none; }
+
+.link-info {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 180px;
+}
+.link-label { font-weight: 700; }
+.link-sub { color: var(--muted); font-size: 0.85rem; }
+
+.link-btn-primary {
+  display: inline-block;
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.link-btn-primary:hover { filter: brightness(1.1); }
+
+.copy-btn {
+  padding: 0.5rem 0.9rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: transparent;
+  color: var(--fg);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.copy-btn:hover { background: rgba(255, 255, 255, 0.08); }
+
+.status-teams {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+.status-team-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.5rem 0.9rem;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 8px;
+}
