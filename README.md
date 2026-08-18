@@ -7,6 +7,7 @@ A "Guess the Movie" party game for the living room. Players watch a short (10–
 - **Host display** (`/host`) — runs full-screen in a browser on a PC connected to the TV (or mirrored from a phone via AirPlay/Chromecast/Miracast if no PC is available). Shows the clip, the room code, and the scoreboard. Never shows the answer before it's revealed.
 - **Player controller** (`/player`) — opened on each friend's phone. Join a room by code, buzz in, submit answers.
 - **Admin tagging tool** (`/admin-tagging`) — where clips get added: paste a YouTube URL, set start/end timestamps, fill in movie metadata (title, year, director, cast).
+- **Test hub** (`/test-hub`) — dev-only tool for playtesting: seeds a fixed room code and fake teams from your real clip library, and gives you one-click links to open the host (regular browser tab) and each team (its own incognito window, so they don't share one Firebase identity).
 - **Data** (`/data`) — clip/movie schema and any local reference data. Live game state and the clip library are stored in Firebase.
 
 ## Status

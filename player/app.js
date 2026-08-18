@@ -790,9 +790,42 @@ function leaveRoom() {
 
 els.leaveRoomBtn.addEventListener("click", leaveRoom);
 
+// ---------- Auto-join from URL (test hub deep links) ----------
+// Lets /test-hub open a fully-prefilled (optionally auto-submitted) join
+// link — e.g. ?room=TEST&team=Team+A&name=Tester1&emoji=🍿&autojoin=1 —
+// without touching the normal manual-join flow at all when these params
+// are absent. Doesn't check localStorage first: a fresh incognito window
+// (the intended use) never has any anyway, and a real player scanning a
+// QR/link should always land on a clean prefilled form, not a stale
+// reconnect from whatever this browser was doing last.
+
+function tryAutoJoinFromQuery() {
+  const params = new URLSearchParams(window.location.search);
+  const roomParam = params.get("room");
+  if (!roomParam) return false;
+
+  els.roomCodeInput.value = roomParam.trim().toUpperCase();
+  els.teamNameInput.value = params.get("team") || "";
+  els.nameInput.value = params.get("name") || "";
+
+  const emojiParam = params.get("emoji");
+  if (emojiParam) {
+    selectedEmoji = emojiParam;
+    [...els.emojiGrid.children].forEach((c) => c.classList.toggle("selected", c.textContent === emojiParam));
+  }
+
+  showScreen("join");
+  if (params.get("autojoin") === "1" && els.roomCodeInput.value && els.teamNameInput.value && els.nameInput.value && selectedEmoji) {
+    els.joinBtn.click();
+  }
+  return true;
+}
+
 // ---------- Reconnect on load ----------
 
 (async function initFromStorage() {
+  if (tryAutoJoinFromQuery()) return;
+
   const savedRoom = localStorage.getItem(ROOM_KEY);
   const savedTeamId = localStorage.getItem(TEAM_ID_KEY);
   const savedName = localStorage.getItem(NAME_KEY);
