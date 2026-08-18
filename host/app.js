@@ -105,6 +105,9 @@ let queue = []; // clip ids not yet shown this game
 let usedClipIds = []; // clip ids already shown this game (any team) — never re-served
 let currentClip = null;
 
+let triviaBank = []; // general movie-trivia questions (triviaBank/{id}), independent of any clip
+let usedTriviaIds = []; // triviaBank ids already asked this game — never repeated within one running game
+
 let ytPlayer = null;
 let playerReady = false; // true only after the player's onReady event fires
 let endWatcher = null;
@@ -161,11 +164,11 @@ const FIELD_LABELS = { movie: "Movie", year: "Year", actor1: "Actor 1", actor2: 
 let currentRoundRows = [];
 
 // Bonus trivia: after some reveals, instead of going straight to the next
-// clip, a Kahoot-style multiple-choice question about the movie just
-// revealed pops up — every team races to answer, first correct one wins.
-// Only fires for clips that actually have trivia authored in
-// admin-tagging, and even then only some of the time so it stays a
-// surprise rather than a fixed extra step every round.
+// clip, a Kahoot-style multiple-choice question pops up — every team races
+// to answer, first correct one wins. The question can come from either the
+// clip's own authored trivia (admin-tagging) or the general movie-trivia
+// bank (admin-tagging/trivia.html) — see pickTriviaCandidate. Fires only
+// some of the time so it stays a surprise rather than a fixed extra step.
 const TRIVIA_CHANCE = 0.5;
 const TRIVIA_WINDOW_MS = 12000;
 const TRIVIA_POINTS = 5;
@@ -302,6 +305,7 @@ async function saveGameState() {
     await setDoc(doc(db, "rooms", roomCode, "private", "gameState"), {
       queueIds: queue,
       usedClipIds,
+      usedTriviaIds,
       roundIndex: currentRoundIndex,
       updatedAt: serverTimestamp(),
     });
@@ -332,6 +336,7 @@ async function resumeGame(resumable) {
   roomCode = resumable.code;
   currentRoundIndex = resumable.gameState.roundIndex || 0;
   usedClipIds = resumable.gameState.usedClipIds || [];
+  usedTriviaIds = resumable.gameState.usedTriviaIds || [];
   // Drop any ids for clips that no longer exist in the library (deleted
   // since this game started) rather than let them jam up the queue.
   queue = (resumable.gameState.queueIds || []).filter((id) => clipsById[id]);
@@ -348,6 +353,7 @@ async function resumeGame(resumable) {
 
 async function startNewGame(gameName) {
   usedClipIds = [];
+  usedTriviaIds = [];
   const created = await createRoom(gameName);
   if (!created) return;
   initQueue();
@@ -373,6 +379,7 @@ async function finishGame() {
   teamsMap = {};
   currentRoundIndex = 0;
   usedClipIds = [];
+  usedTriviaIds = [];
   queue = [];
   els.roomInfo.hidden = true;
   showNewGameSetup();
@@ -686,9 +693,26 @@ async function returnToLobby() {
 
 // ---------- Bonus trivia ----------
 
-function pickTriviaForClip(clip) {
-  if (!clip || !clip.trivia || clip.trivia.length === 0) return null;
-  return clip.trivia[Math.floor(Math.random() * clip.trivia.length)];
+// Picks the specific trivia question for a bonus round, drawing from
+// whichever clip trivia this clip has (if any) plus the general bank
+// (excluding questions already asked this game). When both pools have
+// something to offer, it's a 50/50 coin flip on the *source* first, then a
+// random pick within that source — a pure count-weighted pick would almost
+// always land on the bank once it has 200 entries against a clip's 1-2, so
+// this keeps both feeling present rather than making clip-authored trivia
+// vanishingly rare.
+function pickTriviaCandidate(clip) {
+  const clipTrivia = (clip && clip.trivia) || [];
+  const availableBank = triviaBank.filter((q) => !usedTriviaIds.includes(q.id));
+  if (clipTrivia.length === 0 && availableBank.length === 0) return null;
+
+  const useBank = availableBank.length > 0 && (clipTrivia.length === 0 || Math.random() < 0.5);
+  if (useBank) {
+    const q = availableBank[Math.floor(Math.random() * availableBank.length)];
+    return { question: q.question, options: q.options, correctIndex: q.correctIndex, bankId: q.id };
+  }
+  const q = clipTrivia[Math.floor(Math.random() * clipTrivia.length)];
+  return { question: q.question, options: q.options, correctIndex: q.correctIndex, bankId: null };
 }
 
 function renderTriviaOptions(targetEl, options, { dimWrong = false, correctIndex = null } = {}) {
@@ -882,6 +906,20 @@ async function loadLibrary() {
   // library and its localStorage mirror, they just never get queued.
   clips = clips.filter((c) => !c.excluded);
   clipsById = Object.fromEntries(clips.map((c) => [c.id, c]));
+}
+
+// General trivia bank (see admin-tagging/trivia.html) — best-effort, since
+// a game should still be playable with clips alone if this fails or is
+// simply empty.
+async function loadTriviaBank() {
+  try {
+    const snap = await getDocs(collection(db, "triviaBank"));
+    triviaBank = [];
+    snap.forEach((d) => triviaBank.push({ id: d.id, ...d.data() }));
+  } catch (err) {
+    console.error("Failed to load trivia bank", err);
+    triviaBank = [];
+  }
 }
 
 // ---------- Panel switching ----------
@@ -1314,8 +1352,13 @@ async function advanceToNextRound() {
 }
 
 els.nextBtn.addEventListener("click", async () => {
-  const trivia = pickTriviaForClip(currentClip);
-  if (trivia && Math.random() < TRIVIA_CHANCE) {
+  const firing = Math.random() < TRIVIA_CHANCE;
+  const trivia = firing ? pickTriviaCandidate(currentClip) : null;
+  if (trivia) {
+    if (trivia.bankId) {
+      usedTriviaIds.push(trivia.bankId);
+      await saveGameState();
+    }
     await startTriviaRound(trivia);
   } else {
     await advanceToNextRound();
@@ -1327,6 +1370,7 @@ els.triviaContinueBtn.addEventListener("click", advanceToNextRound);
 els.reshuffleBtn.addEventListener("click", async () => {
   await returnToLobby();
   usedClipIds = []; // the whole library is fair game again once it's been fully exhausted
+  usedTriviaIds = [];
   initQueue();
   await saveGameState();
   showIdle();
@@ -1364,6 +1408,7 @@ els.importInput.addEventListener("change", async (e) => {
 
 async function init() {
   await loadLibrary();
+  await loadTriviaBank();
   if (clips.length === 0) {
     showPanel("no-clips");
     return;

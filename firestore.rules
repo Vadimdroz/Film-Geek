@@ -32,6 +32,13 @@ service cloud.firestore {
       allow read, write: if isSignedIn();
     }
 
+    // General movie-trivia bank, independent of any clip — managed from
+    // admin-tagging/trivia.html, read by the host for bonus-trivia rounds.
+    // Same permissive stance as clipLibrary (private living-room game).
+    match /triviaBank/{questionId} {
+      allow read, write: if isSignedIn();
+    }
+
     match /rooms/{roomCode} {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && request.resource.data.hostUid == request.auth.uid;
